@@ -24,28 +24,3 @@ This API allows you to serve personalized item recommendations (e.g., movies, bo
 | **FastAPI** | Web framework for building APIs |
 | **Pandas** | Data manipulation and preprocessing |
 | **scikit-learn** | Similarity computation (cosine, etc.) |
-| **Uvicorn** | ASGI server for running the FastAPI app |
-
----
-
-## 📂 Project Structure
-
-recommendation-api/
-│
-├── app/
-│ ├── main.py 
-│ ├── models.py 
-│ ├── recommender.py 
-│ ├── data_loader.py 
-│ ├── utils.py 
-│ └── init.py
-│
-├── data/
-│ ├── items.csv
-│ └── ratings.csv 
-│
-├── tests/
-│ └── test_recommendations.py
-│
-├── requirements.txt
-└── README.md
