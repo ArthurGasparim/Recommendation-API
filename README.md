@@ -33,15 +33,16 @@ This API allows you to serve personalized item recommendations (e.g., movies, bo
 recommendation-api/
 │
 ├── app/
-│ ├── main.py # FastAPI entry point
-│ ├── models.py # Data models (Pydantic schemas)
-│ ├── recommender.py # Core recommendation logic
-│ ├── data_loader.py # Loads and preprocesses dataset
-│ ├── utils.py # Helper functions (similarity, normalization, etc.)
+│ ├── main.py 
+│ ├── models.py 
+│ ├── recommender.py 
+│ ├── data_loader.py 
+│ ├── utils.py 
 │ └── init.py
 │
 ├── data/
-│ └── items.csv # Sample dataset (item_id, title, features, ratings, etc.)
+│ ├── items.csv
+│ └── ratings.csv 
 │
 ├── tests/
 │ └── test_recommendations.py
