@@ -1,4 +1,7 @@
 import pandas as pd
+import pandas as pd
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
 def read_products_csv():
     booksDirty_df = pd.read_csv("data/books.csv")
@@ -8,22 +11,25 @@ def read_products_csv():
     books_tags_df = pd.read_csv("data/book_tags.csv")
     books_df = create_useful_book_dataframe(booksDirty_df,tags_df,books_tags_df)
     book = books_df.loc[books_df["title"] == "The Hunger Games"].iloc[0]
-    df = get_recommendation_item_based(book=book,books_df=books_df)
+    #df = get_recommendation_user_based(user_id=1,ratings_df=ratings_df,books_df=books_df)
+    df = get_recommendation_item_based(book=book,ratings_df=ratings_df,books_df=books_df)
     print(df)
 
 def create_useful_book_dataframe(booksDirty_df : pd.DataFrame, tags_df : pd.DataFrame, books_tags_df : pd.DataFrame):
-    #Create a books_DF with only useaful columns(Using the tag id)
+   #Create a books_DF with only useaful columns(Using the tag id)
     books_df = pd.DataFrame()
-    books_df["id"] = booksDirty_df["book_id"]
+    books_df["id"] = booksDirty_df["id"]
+    books_df["good_id"] = booksDirty_df["book_id"]
     books_df["title"] = booksDirty_df["original_title"]
     books_df["authors"] = booksDirty_df["authors"]
     books_df["average_rating"] = booksDirty_df["average_rating"]
-    books_merge_tags = pd.merge(books_df,books_tags_df,left_on='id', right_on='goodreads_book_id', how='inner')
+    books_merge_tags = pd.merge(books_df,books_tags_df,left_on='good_id', right_on='goodreads_book_id', how='inner')
     tags_final = books_merge_tags.groupby('id')['tag_id'].agg(list)
     books_df = pd.merge(books_df,tags_final,on='id',how='inner')
+    books_df = books_df.drop(columns=["good_id"])
     return books_df
 
-def get_recommendation_item_based(book: pd.Series, books_df: pd.DataFrame):
+def get_recommendation_item_based(book: pd.Series, books_df: pd.DataFrame,ratings_df:pd.DataFrame):
   column = []
   tags1 = book['tag_id']
   length_book_1 = len(tags1)
@@ -53,8 +59,21 @@ def get_recommendation_item_based(book: pd.Series, books_df: pd.DataFrame):
     line.append(book_avg_rating_score+final_similarity_score)
     column.append(line)
   comparation_df = pd.DataFrame(column,columns=["name","authors","tag_similarity_rating","avg_score_rating","rating"])
-  return comparation_df.sort_values(ascending=False ,by="rating")
+  final_array = comparation_df.sort_values(ascending=False ,by="rating")[:5]
+  return final_array
 
-
+def get_recommendation_user_based(user_id: int, ratings_df: pd.DataFrame, books_df:pd.DataFrame):
+    #Filtering the dataset
+    ratings_df_clean = ratings_df.loc[ratings_df["book_id"].isin(books_df['id'])]
+    #Generating the sparce matrix
+    rating_matrix = ratings_df_clean.pivot_table(index='user_id', columns='book_id', values='rating').fillna(0)
+    #Applying th cosine similarity method
+    item_similarity = cosine_similarity(rating_matrix.T)
+    #Finding user scores
+    item_scores = rating_matrix.iloc[user_id].dot(item_similarity)
+    n = 5
+    #getting the top 5 books by user scores
+    recommended_items = np.argsort(item_scores)[::-1][:n]
+    return recommended_items
 
 read_products_csv()
