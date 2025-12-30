@@ -10,9 +10,10 @@ def read_products_csv():
     to_read_df = pd.read_csv("data/to_read.csv")
     books_tags_df = pd.read_csv("data/book_tags.csv")
     books_df = create_useful_book_dataframe(booksDirty_df,tags_df,books_tags_df)
-    book = books_df.loc[books_df["title"] == "The Hunger Games"].iloc[0]
+    user_id = 98
+    ratings_df = ratings_df.loc[ratings_df["book_id"].isin(books_df['id'])]
     #df = get_recommendation_user_based(user_id=1,ratings_df=ratings_df,books_df=books_df)
-    df = get_recommendation_item_based(book=book,ratings_df=ratings_df,books_df=books_df)
+    df = get_recommendation_item_based(user_id=user_id,ratings_df=ratings_df,books_df=books_df,to_read_df=to_read_df)
     print(df)
 
 def create_useful_book_dataframe(booksDirty_df : pd.DataFrame, tags_df : pd.DataFrame, books_tags_df : pd.DataFrame):
@@ -29,44 +30,56 @@ def create_useful_book_dataframe(booksDirty_df : pd.DataFrame, tags_df : pd.Data
     books_df = books_df.drop(columns=["good_id"])
     return books_df
 
-def get_recommendation_item_based(book: pd.Series, books_df: pd.DataFrame,ratings_df:pd.DataFrame):
+def get_recommendation_item_based(user_id:int,books_df: pd.DataFrame,ratings_df:pd.DataFrame,to_read_df:pd.DataFrame):
   column = []
-  tags1 = book['tag_id']
-  length_book_1 = len(tags1)
-  set1 = set(tags1)
+  books = list(books_df.loc[ratings_df["user_id"] == user_id]["id"][:5])
+  user_to_read = to_read_df.loc[to_read_df["user_id"] == user_id]
+  user_already_read = ratings_df.loc[ratings_df["user_id"] == user_id]
+  user_to_read = user_to_read["book_id"]
+  user_already_read = user_already_read["book_id"]
   for index, book2 in books_df.iterrows():
     line = []
-    line.append(book2["title"])
-    line.append(book2["authors"])
+    line.append(book2["id"])
     #Allocating the String array of the tags names
     tags2 = book2['tag_id']
     length_book_2 = len(tags2)
     #Creating a Set to be able to merge the two of the
     set2 = set(tags2)
     #merging the Sets
-    final_df = list(set1 & set2)
-    equal_tags = len(final_df)
-    distance = abs(length_book_2-length_book_1)
-    bigger = (length_book_1 + length_book_2 + abs(length_book_1 - length_book_2)) / 2
-    #Calculating similarity between tags as 60% of the final score
-    initial_tags_simiilar_value = (equal_tags*0.7)/length_book_1
-    #Nomalizing factor to minimize comparissons with vastly diferent sizes having a lot of percentages
-    normalizing_factor = (1 - (distance/bigger))
-    final_similarity_score = initial_tags_simiilar_value*normalizing_factor
+    final_score = 0
+    to_read_score = 0
+    #Atributting part of the score to the user wanting to read the book and the user not having read the book
+    if(book2["id"] in (user_to_read)):
+        to_read_score = 1
+    already_read_score = 0
+    if(not(book2["id"] in (user_already_read))):
+        already_read_score = 1
+    final_score = to_read_score + already_read_score
+    #Putting a value to the avg score of the book in the final rating
     book_avg_rating_score = (book2['average_rating']/5)*0.3
-    line.append(final_similarity_score)
-    line.append(book_avg_rating_score)
-    line.append(book_avg_rating_score+final_similarity_score)
+    for book in books:
+      tags1 = book['tag_id']
+      set1 = set(tags1)
+      length_book_1 = len(tags1)
+      final_df = list(set1 & set2)
+      equal_tags = len(final_df)
+      distance = abs(length_book_2-length_book_1)
+      bigger = (length_book_1 + length_book_2 + abs(length_book_1 - length_book_2)) / 2
+      #Calculating similarity between tags as 60% of the final score
+      initial_tags_simiilar_value = (equal_tags*0.7)/length_book_1
+      #Nomalizing factor to minimize comparissons with vastly diferent sizes having a lot of percentages
+      normalizing_factor = (1 - (distance/bigger))
+      final_similarity_score = initial_tags_simiilar_value*normalizing_factor
+      final_score += (book_avg_rating_score+final_similarity_score)
+    line.append(final_score)
     column.append(line)
-  comparation_df = pd.DataFrame(column,columns=["name","authors","tag_similarity_rating","avg_score_rating","rating"])
-  final_array = comparation_df.sort_values(ascending=False ,by="rating")[:5]
-  return final_array
+  comparation_df = pd.DataFrame(column,columns=["id","rating"])
+  return list(comparation_df.sort_values(ascending=False ,by="rating")[:5]["id"])
 
 def get_recommendation_user_based(user_id: int, ratings_df: pd.DataFrame, books_df:pd.DataFrame):
     #Filtering the dataset
-    ratings_df_clean = ratings_df.loc[ratings_df["book_id"].isin(books_df['id'])]
     #Generating the sparce matrix
-    rating_matrix = ratings_df_clean.pivot_table(index='user_id', columns='book_id', values='rating').fillna(0)
+    rating_matrix = ratings_df.pivot_table(index='user_id', columns='book_id', values='rating').fillna(0)
     #Applying th cosine similarity method
     item_similarity = cosine_similarity(rating_matrix.T)
     #Finding user scores
