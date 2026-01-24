@@ -24,7 +24,7 @@ def create_useful_book_dataframe(booksDirty_df : pd.DataFrame, tags_df : pd.Data
     books_df["title"] = booksDirty_df["original_title"]
     books_df["authors"] = booksDirty_df["authors"]
     books_df["average_rating"] = booksDirty_df["average_rating"]
-    books_merge_tags = pd.merge(books_df,books_tags_df,left_on='good_id', right_on='goodreads_book_id', how='inner')
+    books_merge_tags =  pd.merge(books_df,books_tags_df,left_on='good_id', right_on='goodreads_book_id', how='inner')
     tags_final = books_merge_tags.groupby('id')['tag_id'].agg(list)
     books_df = pd.merge(books_df,tags_final,on='id',how='inner')
     books_df = books_df.drop(columns=["good_id"])
@@ -32,7 +32,7 @@ def create_useful_book_dataframe(booksDirty_df : pd.DataFrame, tags_df : pd.Data
 
 def get_recommendation_item_based(user_id:int,books_df: pd.DataFrame,ratings_df:pd.DataFrame,to_read_df:pd.DataFrame):
   column = []
-  books = list(books_df.loc[ratings_df["user_id"] == user_id]["id"][:5])
+  books = list(books_df.loc[ratings_df.sort_values(by="rating",ascending=False)["user_id"] == user_id]["id"][:5])
   user_to_read = to_read_df.loc[to_read_df["user_id"] == user_id]
   user_already_read = ratings_df.loc[ratings_df["user_id"] == user_id]
   user_to_read = user_to_read["book_id"]

@@ -1,9 +1,10 @@
 import * as Style from './style'
 import logo from '../../Assets/logo.jpg'
-function Header(){
+function Header({caminho}){
     return(
         <Style.Container>
-            <img src={logo}></img>
+            <a href='/'><img src={logo}></img></a> 
+            {caminho && <a href='/usuario'>Login</a>}
         </Style.Container>
     )
 }
