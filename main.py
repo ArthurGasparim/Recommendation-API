@@ -1,13 +1,17 @@
 from fastapi import FastAPI
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
-
+from db.db import engine
 app = FastAPI()
+
+
 
 origins = [
     "http://localhost:3000",
     "https://localhost:5000"
 ]
+
+
 
 app.add_middleware(
     CORSMiddleware,
