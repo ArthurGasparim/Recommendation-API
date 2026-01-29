@@ -6,7 +6,10 @@ function Usuario(){
     return(
         <div>
             <Header/>
-            Usuario
+            <Style.Container>
+                Usuario
+            </Style.Container>
+             
             <Footer/> 
         </div>
     )
