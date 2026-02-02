@@ -4,7 +4,7 @@ function Header({caminho}){
     return(
         <Style.Container>
             <a href='/'><img src={logo}></img></a> 
-            {caminho && <a href='/usuario'>Login</a>}
+            {caminho=="usuario" && <a href='/usuario'>Login</a>}
         </Style.Container>
     )
 }

@@ -5,6 +5,7 @@ import Footer from '../../Components/Footer'
 import api from '../../Services/service'
 function Home(){
     const [Resposta, atualizaResposta] = useState("Ola")
+    const [id,atualizaId] = useState();
     async function verificaAtrasadas() {
     await api.get('/')
     .then(resp=>{
@@ -13,9 +14,17 @@ function Home(){
     }
     )
     }
+
+    useEffect(() => {
+    const newUserId = sessionStorage.getItem("newUserId");
+    if (newUserId) {
+        atualizaId(newUserId)
+      
+    }
+  }, []);
     return(
         <div>
-            <Header caminho = "usuario"/>
+            <Header caminho={!id ? "usuario" : ""} />
             Home
             {Resposta}
             <button onClick={verificaAtrasadas}>Teste</button>

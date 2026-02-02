@@ -1,9 +1,13 @@
-from fastapi import FastAPI
+from fastapi import FastAPI,Depends
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
-from db.db import engine
+from db.db import engine,user as User,get_session,Session
+from typing import Annotated
+
+
 app = FastAPI()
 
+SessionDep = Annotated[Session, Depends(get_session)]
 
 
 origins = [
@@ -24,6 +28,27 @@ app.add_middleware(
 @app.get("/")
 def response_root():
     return {"message" : "Testing FastApi"}
+
+
+@app.post("/createUser")
+def createUser(user: User,session:SessionDep):
+    user1 = session.get(User, user.id)
+    if not user1:
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return {
+            "alert": "User successfully created",
+            "user": user,
+            "status": "created"
+        }
+    else:
+        return {
+            "alert": "Login Successful",
+            "user": user1,
+            "status": "logged_in"
+        }
+    
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=5000)
