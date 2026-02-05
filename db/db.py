@@ -17,7 +17,7 @@ class ratings(SQLModel,table=True):
     rating:int = Field(index=True)
 
 class tags(SQLModel,table=True):
-    tag_id:int = Field(primary_key=True)
+    tag_id:int | None = Field(default=None,primary_key=True)
     tag_name:str = Field(index=True)
 
 class to_read(SQLModel,table=True):

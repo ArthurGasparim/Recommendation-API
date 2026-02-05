@@ -1,10 +1,10 @@
 from fastapi import FastAPI,Depends,Query
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
-from db.db import engine,user as User,Books,get_session,Session
+from db.db import engine,to_read as ToRead, books_tags as BooksTags,user as User,Books,ratings as Rating,tags as Tags , get_session,Session
 from typing import Annotated
 from sqlmodel import select
-
+from pydantic import BaseModel
 
 app = FastAPI()
 
@@ -75,6 +75,63 @@ def createBook(book:Books,session:SessionDep):
 def getBook(book_id:int,session:SessionDep)->Books:
     book = session.get(Books,book_id)
     return book
+
+
+
+@app.post("/rating")
+def submitRating(column: Rating,session:SessionDep):
+    statement = select(Rating).where(Rating.book_id == column.book_id, Rating.user_id == column.user_id)
+    rate = session.exec(statement=statement).first()
+    if(not rate):
+        rate = column
+        session.add(rate)
+    else:
+        rate.rating = column.rating
+    session.commit()
+    session.refresh(rate)
+    return rate
+
+class TagRequest(BaseModel):
+    book_id: int
+    tag_name: str
+
+@app.post("/tag")
+def submitTag(tag:TagRequest,session:SessionDep):
+    statement = select(Tags).where(Tags.tag_name == f"{tag.tag_name}")
+    tag1 = session.exec(statement=statement).first()
+    if(not tag1):
+        session.add(Tags(tag_name=tag.tag_name))
+        session.flush()
+    tag1 = session.exec(statement=statement).first()
+    statement = select(BooksTags).where(BooksTags.tag_id == tag1.tag_id, BooksTags.goodreads_book_id == tag.book_id)
+    tag_book1 = session.exec(statement=statement).first()
+    if(not tag_book1):
+        session.add(BooksTags(goodreads_book_id=tag.book_id,tag_id=tag1.tag_id,count=1))
+    else:
+        tag_book1.count += 1
+    session.commit()
+    return {"message":"Sucessifully added"}
+
+class ReadRequest(BaseModel):
+    book_id: int
+    value: bool
+    id: int
+
+@app.post("/read")
+def toRead(data: ReadRequest,session:SessionDep):
+    statement = select(ToRead).where(ToRead.book_id == data.book_id, ToRead.user_id == data.id)
+    toread = session.exec(statement).first()
+    if(not data.value):
+        if(toread):
+            session.delete(toread)
+    else:
+        if(not toread):
+            newData = ToRead(book_id=data.book_id,user_id=data.id)
+            session.add(newData)
+    session.commit()
+
+    return {"message":"Succes"}
+
 
 
 if __name__ == "__main__":
