@@ -13,8 +13,7 @@ def read_products_csv():
     user_id = 98
     ratings_df = ratings_df.loc[ratings_df["book_id"].isin(books_df['id'])]
     #df = get_recommendation_user_based(user_id=1,ratings_df=ratings_df,books_df=books_df)
-    df = get_recommendation_item_based(user_id=user_id,ratings_df=ratings_df,books_df=books_df,to_read_df=to_read_df)
-    print(df)
+    print(books_df)
 
 def create_useful_book_dataframe(booksDirty_df : pd.DataFrame, tags_df : pd.DataFrame, books_tags_df : pd.DataFrame):
    #Create a books_DF with only useaful columns(Using the tag id)
@@ -24,11 +23,14 @@ def create_useful_book_dataframe(booksDirty_df : pd.DataFrame, tags_df : pd.Data
     books_df["title"] = booksDirty_df["original_title"]
     books_df["authors"] = booksDirty_df["authors"]
     books_df["average_rating"] = booksDirty_df["average_rating"]
-    books_merge_tags =  pd.merge(books_df,books_tags_df,left_on='good_id', right_on='goodreads_book_id', how='inner')
-    tags_final = books_merge_tags.groupby('id')['tag_id'].agg(list)
-    books_df = pd.merge(books_df,tags_final,on='id',how='inner')
-    books_df = books_df.drop(columns=["good_id"])
+    books_df["image_url"] = booksDirty_df["image_url"]
+    #books_merge_tags =  pd.merge(books_df,books_tags_df,left_on='good_id', right_on='goodreads_book_id', how='inner')
+    #tags_final = books_merge_tags.groupby('id')['tag_id'].agg(list)
+    #books_df = pd.merge(books_df,tags_final,on='id',how='inner')
+    #books_df = books_df.drop(columns=["good_id"])
     return books_df
+
+
 
 def get_recommendation_item_based(user_id:int,books_df: pd.DataFrame,ratings_df:pd.DataFrame,to_read_df:pd.DataFrame):
   column = []

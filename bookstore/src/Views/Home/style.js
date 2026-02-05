@@ -12,13 +12,18 @@ export const ScrollBar = styled.div`
   overflow-x: auto;
   white-space: nowrap;      
   width: 100%;
-  height: 150px;
+  height: 350px;
   gap: 10px;
 `
 
 export const Item = styled.div`
   
 `
+
+export const Line = styled.div`
+  display: flex;
+`
+
 
 /*flex-shrink: 0;
   width: 100px;

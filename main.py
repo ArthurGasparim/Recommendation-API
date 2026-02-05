@@ -3,12 +3,16 @@ import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from db.db import engine,to_read as ToRead, books_tags as BooksTags,user as User,Books,ratings as Rating,tags as Tags , get_session,Session
 from typing import Annotated
-from sqlmodel import select
+from sqlmodel import select,delete
 from pydantic import BaseModel
-
+from recommender import create_useful_book_dataframe, get_recommendation_item_based,get_recommendation_user_based
+import pandas as pd
+from sqlalchemy import text
 app = FastAPI()
 
 SessionDep = Annotated[Session, Depends(get_session)]
+
+
 
 
 origins = [
@@ -25,6 +29,79 @@ app.add_middleware(
     allow_methods=["*"],    # Allows all methods (GET, POST, PUT, DELETE, etc.)
     allow_headers=["*"],    # Allows all headers
 )
+
+@app.get("/")
+def loadData(session:SessionDep):
+    global tags_df, to_read_df, books_tags_df, books_df, ratings_df
+    with session.bind.connect() as conn:
+        tags_df = pd.read_sql(select(Tags), conn)
+        to_read_df = pd.read_sql(select(ToRead), conn)
+        books_tags_df = pd.read_sql(select(BooksTags), conn)
+        books_df = pd.read_sql(select(Books), conn)
+        ratings_df = pd.read_sql(select(Rating), conn)
+        books_merge_tags =  pd.merge(books_df,books_tags_df,left_on='good_id', right_on='goodreads_book_id', how='inner')
+        tags_final = books_merge_tags.groupby('id')['tag_id'].agg(list)
+        books_df = pd.merge(books_df,tags_final,on='id',how='inner')
+        books_df = books_df.drop(columns=["good_id"])
+    return {"status": "ok"}
+
+@app.get("/clearTables")
+def clearTables(session:SessionDep):
+    statement = delete(Books)
+    session.exec(statement)
+    session.commit()
+    statement = delete(BooksTags)
+    session.exec(statement)
+    session.commit()
+    statement = delete(Tags)
+    session.exec(statement)
+    session.commit()
+    statement = delete(Rating)
+    session.exec(statement)
+    session.commit()
+    statement = delete(ToRead)
+    session.exec(statement)
+    session.commit()
+
+
+@app.get("/loadTest")
+def loadTest():
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE ratings, tags, to_read, books_tags, books RESTART IDENTITY CASCADE"))
+    booksDirty_df_test = pd.read_csv("data/books.csv")
+    ratings_df_test = pd.read_csv("data/ratings.csv")
+    tags_df_test = pd.read_csv("data/tags.csv")
+    to_read_df_test = pd.read_csv("data/to_read.csv")
+    books_tags_df_test = pd.read_csv("data/book_tags.csv")
+    books_df_test = create_useful_book_dataframe(booksDirty_df_test,tags_df_test,books_tags_df_test)
+    ratings_df_test = ratings_df_test.loc[ratings_df_test["book_id"].isin(books_df_test['id'])]
+    ratings_df_test.to_sql('ratings',con=engine,if_exists='replace', index=False)
+    tags_df_test.to_sql('tags',con=engine,if_exists='append', index=False)
+    to_read_df_test.to_sql('to_read',con=engine,if_exists='append', index=False)
+    books_tags_df_test.to_sql(
+    'books_tags',
+    con=engine,
+    if_exists='replace',
+    index=False
+    )
+    books_df_test.to_sql("books",con=engine,if_exists='append', index=False)
+    return {"status": "ok"}
+
+@app.get("/RecIB/{id}")
+def getRecIB(id:int,session:SessionDep):
+    ids = get_recommendation_item_based(user_id=id,books_df=books_df,ratings_df=ratings_df,to_read_df=to_read_df)
+    statement = select(Books).where(Books.id.in_(ids))
+    books = session.exec(statement=statement).all()
+    return books
+
+@app.get("/RecUB/{id}")
+def getRecIB(id:int,session:SessionDep):
+    print(ratings_df)
+    ids = get_recommendation_user_based(user_id=id,books_df=books_df,ratings_df=ratings_df)
+    ids = ids.astype(int).tolist()   
+    statement = select(Books).where(Books.id.in_(ids))
+    books = session.exec(statement=statement).all()
+    return books
 
 @app.get("/all")
 def read_books(session:SessionDep,offset:int=0,limit:Annotated[int, Query(le=100)] = 100,

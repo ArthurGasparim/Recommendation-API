@@ -56,7 +56,8 @@ function BookPage(){
         <div>
             <Header/>
             <Style.Container>
-                <Style.Line><span>Original Title:&nbsp;</span><p>{book.original_title}</p></Style.Line>
+                <img src={book.image_url}></img>
+                <Style.Line><span>Original Title:&nbsp;</span><p>{book.title}</p></Style.Line>
                  <Style.Line><span>Authors:&nbsp;</span><p>{book.authors}</p></Style.Line>
                   <Style.Line><span>Average Rating:&nbsp;</span><p>{book.average_rating}</p></Style.Line>
                 <Style.FormContainer>

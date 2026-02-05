@@ -1,10 +1,11 @@
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 class Books(SQLModel,table=True):
     id:int | None = Field(default=None,primary_key=True)
-    book_id: int = Field(index=True)
-    original_title: str = Field(index=True)
+    good_id: int = Field(index=True)
+    title: str|None = Field(index=True)
     authors:str = Field(index=True)
     average_rating:float = Field(index=True)
+    image_url: str = Field(index=True, default="")
 
 class books_tags(SQLModel,table=True):
     goodreads_book_id:int = Field(primary_key=True)
@@ -47,6 +48,8 @@ def get_session():
 
 
 def create_db_and_tables():
+    SQLModel.metadata.drop_all(engine)
+    
     SQLModel.metadata.create_all(engine)
 
 create_db_and_tables()

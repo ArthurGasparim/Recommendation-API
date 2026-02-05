@@ -1,13 +1,13 @@
 import * as Style from "./style"
 
-function Card({title,author,average_rating}){
+function Card({img,title,author,average_rating}){
     
     return(
         <Style.Container>
-            <div></div>
+            <img src={img}></img>
             <Style.Bottom>
                 <p>{title}</p>
-                <p>{author}</p>
+                <p>{author.split(",")[0]}</p>
                 <p>{average_rating}</p>
             </Style.Bottom>
         </Style.Container>
