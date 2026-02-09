@@ -1,8 +1,9 @@
 import * as Style from "./style" 
+
 function Footer(){
     return(
         <Style.Container>
-            This is the footer
+            <p>&copy; 2024 BookMarket - All rights reserved</p>
         </Style.Container>
     )
 }
