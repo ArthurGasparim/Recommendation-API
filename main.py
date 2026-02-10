@@ -30,20 +30,25 @@ app.add_middleware(
     allow_headers=["*"],    # Allows all headers
 )
 
-@app.get("/")
-def loadData(session:SessionDep):
-    global tags_df, to_read_df, books_tags_df, books_df, ratings_df
-    with session.bind.connect() as conn:
-        tags_df = pd.read_sql(select(Tags), conn)
-        to_read_df = pd.read_sql(select(ToRead), conn)
-        books_tags_df = pd.read_sql(select(BooksTags), conn)
-        books_df = pd.read_sql(select(Books), conn)
-        ratings_df = pd.read_sql(select(Rating), conn)
-        books_merge_tags =  pd.merge(books_df,books_tags_df,left_on='good_id', right_on='goodreads_book_id', how='inner')
-        tags_final = books_merge_tags.groupby('id')['tag_id'].agg(list)
-        books_df = pd.merge(books_df,tags_final,on='id',how='inner')
-        books_df = books_df.drop(columns=["good_id"])
-    return {"status": "ok"}
+@app.on_event("startup")
+def startup_load_data():
+    with engine.connect() as conn:
+        app.state.tags_df = pd.read_sql(select(Tags), conn)
+        app.state.to_read_df = pd.read_sql(select(ToRead), conn)
+        app.state.books_tags_df = pd.read_sql(select(BooksTags), conn)
+        app.state.books_df = pd.read_sql(select(Books), conn)
+        app.state.ratings_df = pd.read_sql(select(Rating), conn)
+
+        books_merge_tags = pd.merge(
+            app.state.books_df,
+            app.state.books_tags_df,
+            left_on="good_id",
+            right_on="goodreads_book_id",
+            how="inner",
+        )
+        tags_final = books_merge_tags.groupby("id")["tag_id"].agg(list)
+        app.state.books_df = pd.merge( app.state.books_df, tags_final, on="id", how="inner").drop(columns=["good_id"])
+
 
 @app.get("/clearTables")
 def clearTables(session:SessionDep):
@@ -75,6 +80,11 @@ def loadTest():
     books_tags_df_test = pd.read_csv("data/book_tags.csv")
     books_df_test = create_useful_book_dataframe(booksDirty_df_test,tags_df_test,books_tags_df_test)
     ratings_df_test = ratings_df_test.loc[ratings_df_test["book_id"].isin(books_df_test['id'])]
+    #ratings_df_test = ratings_df_test[:1000]
+    #tags_df_test = tags_df_test[:1000]
+    #to_read_df_test = to_read_df_test[:1000]
+    #books_tags_df_test = books_tags_df_test[:1000]
+    #books_df_test = books_df_test[:100]
     ratings_df_test.to_sql('ratings',con=engine,if_exists='replace', index=False)
     tags_df_test.to_sql('tags',con=engine,if_exists='append', index=False)
     to_read_df_test.to_sql('to_read',con=engine,if_exists='append', index=False)
@@ -85,23 +95,32 @@ def loadTest():
     index=False
     )
     books_df_test.to_sql("books",con=engine,if_exists='append', index=False)
+    with engine.begin() as conn:
+        conn.execute(text("SELECT setval(pg_get_serial_sequence('tags', 'tag_id'), coalesce(max(tag_id), 0) + 1, false) FROM tags;"))
+        conn.execute(text("SELECT setval(pg_get_serial_sequence('books', 'id'), coalesce(max(id), 0) + 1, false) FROM books;"))
     return {"status": "ok"}
 
 @app.get("/RecIB/{id}")
-def getRecIB(id:int,session:SessionDep):
-    ids = get_recommendation_item_based(user_id=id,books_df=books_df,ratings_df=ratings_df,to_read_df=to_read_df)
+def getRecIB(id: int, session: SessionDep):
+    ids = get_recommendation_item_based(
+        user_id=id,
+        books_df=app.state.books_df,
+        ratings_df=app.state.ratings_df,
+        to_read_df=app.state.to_read_df,
+    )
     statement = select(Books).where(Books.id.in_(ids))
-    books = session.exec(statement=statement).all()
-    return books
+    return session.exec(statement).all()
 
 @app.get("/RecUB/{id}")
-def getRecIB(id:int,session:SessionDep):
-    print(ratings_df)
-    ids = get_recommendation_user_based(user_id=id,books_df=books_df,ratings_df=ratings_df)
-    ids = ids.astype(int).tolist()   
+def getRecUB(id: int, session: SessionDep):
+    ids = get_recommendation_user_based(
+        user_id=id,
+        books_df=app.state.books_df,
+        ratings_df=app.state.ratings_df,
+    ).astype(int).tolist()
     statement = select(Books).where(Books.id.in_(ids))
-    books = session.exec(statement=statement).all()
-    return books
+    return session.exec(statement).all()
+
 
 @app.get("/all")
 def read_books(session:SessionDep,offset:int=0,limit:Annotated[int, Query(le=100)] = 100,
@@ -174,7 +193,7 @@ class TagRequest(BaseModel):
 
 @app.post("/tag")
 def submitTag(tag:TagRequest,session:SessionDep):
-    statement = select(Tags).where(Tags.tag_name == f"{tag.tag_name}")
+    statement = select(Tags).where(Tags.tag_name == tag.tag_name)
     tag1 = session.exec(statement=statement).first()
     if(not tag1):
         session.add(Tags(tag_name=tag.tag_name))

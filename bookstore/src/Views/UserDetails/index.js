@@ -13,7 +13,7 @@ function Usuario(){
         .then((resp)=>{
             alert(resp.data.alert); 
             sessionStorage.setItem("newUserId", id);
-            window.location.href = "http://localhost:3000/"
+            window.location.href = "http://localhost:3000/home"
         })
     }
 

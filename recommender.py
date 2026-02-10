@@ -78,6 +78,7 @@ def get_recommendation_item_based(user_id:int,books_df: pd.DataFrame,ratings_df:
   comparation_df = pd.DataFrame(column,columns=["id","rating"])
   return list(comparation_df.sort_values(ascending=False ,by="rating")[:5]["id"])
 
+
 def get_recommendation_user_based(user_id: int, ratings_df: pd.DataFrame, books_df:pd.DataFrame):
     #Filtering the dataset
     #Generating the sparce matrix

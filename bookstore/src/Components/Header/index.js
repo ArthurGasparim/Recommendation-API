@@ -6,14 +6,14 @@ function Header({caminho, admin}){
     return(
         <Style.Container>
             <Style.Wrapper>
-                <a href='/' className="logo-area">
+                <a href='/home' className="logo-area">
                     
                     <img src={logo} alt="Logo" onError={(e) => {e.target.style.display='none'}} />
                     <span>BookMarket</span>
                 </a> 
                 <Style.Nav>
                     {caminho === "usuario" && (
-                        <a href='/usuario'>
+                        <a href='/'>
                             <FaSignInAlt /> Login
                         </a>
                     )}

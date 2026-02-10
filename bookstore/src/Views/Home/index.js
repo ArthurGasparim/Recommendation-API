@@ -33,13 +33,12 @@ function Home(){
     }
 
     useEffect(() => {
-        api.get("/").then(resp=>{
             CarregaBoooks()
             const newUserId = sessionStorage.getItem("newUserId");
             if (newUserId) {
                 atualizaId(newUserId)
             }
-        })
+        
     }, []);
 
     return(

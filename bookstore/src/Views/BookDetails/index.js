@@ -12,11 +12,11 @@ function Books(){
     const [authors, atualizaAuthors] = useState()
 
     function createBook(){
-        api.post("/createBook",{id:id, book_id:book_id, original_title:original_title, authors:authors, average_rating:average_rating})
+        api.post("/createBook",{id:id, good_id:book_id, title:original_title, authors:authors, average_rating:average_rating,image_url:""})
         .then((resp)=>{
             alert(resp.data.alert); 
             sessionStorage.setItem("newUserId", id);
-            window.location.href = "http://localhost:3000/"
+            window.location.href = "http://localhost:3000/home"
         })
     }
 

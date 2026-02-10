@@ -7,8 +7,8 @@ export default function Rotas(){
     return(
         <Router>
             <Routes>
-                <Route path="/" element={<Home/>}/>
-                <Route path="/usuario" element={<Usuario/>}/>
+                <Route path="/" element={<Usuario/>}/>
+                <Route path="/home" element={<Home/>}/>
                 <Route path="/livro" element={<Books/>}/>
                 <Route path="/Book/:book_id" element={<BookPage/>}/>
             </Routes>

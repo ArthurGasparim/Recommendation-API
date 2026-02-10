@@ -28,7 +28,7 @@ function BookPage(){
 
     function buyBook(){
         api.post("/buy",{book_id:book_id, id:id})
-        window.location.href="http://localhost:3000/"
+        window.location.href="http://localhost:3000/home"
     }
 
     function addTag(){
@@ -48,6 +48,7 @@ function BookPage(){
 
     function controlRead(value){
         updateRead(value)
+        console.log("Book_id: "+book_id +" value:"+value +" id:"+id)
         api.post("/read",{book_id:book_id, value:value, id:id}).then()
     }
 
