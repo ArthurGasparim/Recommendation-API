@@ -19,6 +19,13 @@ function Home(){
         })
     }
 
+    function recommendacoesIB_usu(){
+        const idib = document.getElementById("idIBUsu").value;
+        api.get("/RecIBUsu/"+idib).then(resp =>{
+            atualizaIB(resp.data)
+        })
+    }
+
     function recommendacoesUB(){
         const idub = document.getElementById("idUB").value;
         api.get("/RecUB/"+idub).then(resp =>{
@@ -60,8 +67,10 @@ function Home(){
                 <Style.Section>
                     <Style.SectionTitle>Recomendações Item Based</Style.SectionTitle>
                     <Style.InputGroup>
-                        <input id='idIB' type='number' placeholder="ID do Livro" />
+                        <input id='idIB' type='number' placeholder="ID do Livro"/>
                         <button onClick={recommendacoesIB}>Buscar</button>
+                        <input id='idIBUsu' type='number' placeholder="ID do Usuario"/>
+                        <button onClick={recommendacoesIB_usu}>Buscar</button>
                     </Style.InputGroup>
                     
                     {RecomendIB.length > 0 && (

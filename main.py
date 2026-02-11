@@ -1,11 +1,12 @@
 from fastapi import FastAPI,Depends,Query
+from sklearn.metrics.pairwise import cosine_similarity
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from db.db import engine,to_read as ToRead, books_tags as BooksTags,user as User,Books,ratings as Rating,tags as Tags , get_session,Session
 from typing import Annotated
 from sqlmodel import select,delete
 from pydantic import BaseModel
-from recommender import create_useful_book_dataframe, get_recommendation_item_based,get_recommendation_user_based
+from recommender import create_useful_book_dataframe, get_recommendation_item_based,get_recommendation_user_based,get_recommendation_item_basedUsu
 import pandas as pd
 from sqlalchemy import text
 app = FastAPI()
@@ -48,7 +49,11 @@ def startup_load_data():
         )
         tags_final = books_merge_tags.groupby("id")["tag_id"].agg(list)
         app.state.books_df = pd.merge( app.state.books_df, tags_final, on="id", how="inner").drop(columns=["good_id"])
-
+        #Generating the sparce matrix
+        app.state.rating_matrix = app.state.ratings_df.pivot_table(index='user_id', columns='book_id', values='rating').fillna(0)
+        #Applying th cosine similarity method
+        app.state.item_similarity = cosine_similarity(app.state.rating_matrix.T)
+        
 
 @app.get("/clearTables")
 def clearTables(session:SessionDep):
@@ -100,13 +105,24 @@ def loadTest():
         conn.execute(text("SELECT setval(pg_get_serial_sequence('books', 'id'), coalesce(max(id), 0) + 1, false) FROM books;"))
     return {"status": "ok"}
 
-@app.get("/RecIB/{id}")
+@app.get("/RecIBUsu/{id}")
 def getRecIB(id: int, session: SessionDep):
-    ids = get_recommendation_item_based(
+    ids = get_recommendation_item_basedUsu(
         user_id=id,
         books_df=app.state.books_df,
         ratings_df=app.state.ratings_df,
         to_read_df=app.state.to_read_df,
+
+    )
+    statement = select(Books).where(Books.id.in_(ids))
+    return session.exec(statement).all()
+
+@app.get("/RecIB/{id}")
+def getRecIB(id: int, session: SessionDep):
+    ids = get_recommendation_item_based(
+        book_id=id,
+        books_df=app.state.books_df,
+
     )
     statement = select(Books).where(Books.id.in_(ids))
     return session.exec(statement).all()
@@ -117,6 +133,8 @@ def getRecUB(id: int, session: SessionDep):
         user_id=id,
         books_df=app.state.books_df,
         ratings_df=app.state.ratings_df,
+        rating_matrix= app.state.rating_matrix,
+        item_similarity= app.state.item_similarity
     ).astype(int).tolist()
     statement = select(Books).where(Books.id.in_(ids))
     return session.exec(statement).all()
