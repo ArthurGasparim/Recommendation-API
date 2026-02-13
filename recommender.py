@@ -33,6 +33,7 @@ def create_useful_book_dataframe(booksDirty_df : pd.DataFrame, tags_df : pd.Data
 
 
 def get_recommendation_item_basedUsu(user_id:int,books_df: pd.DataFrame,ratings_df:pd.DataFrame,to_read_df:pd.DataFrame):
+  #gets recoommendation based on a user and his top 5 rated books
   column = []
   books = list(books_df.loc[ratings_df.sort_values(by="rating",ascending=False)["user_id"] == user_id]["id"][:5])
   user_to_read = to_read_df.loc[to_read_df["user_id"] == user_id]
@@ -60,6 +61,7 @@ def get_recommendation_item_basedUsu(user_id:int,books_df: pd.DataFrame,ratings_
     #Putting a value to the avg score of the book in the final rating
     book_avg_rating_score = (book2['average_rating']/5)*0.3
     for book in books:
+      #Comparing tags groups from both groups 
       tags1 = book['tag_id']
       set1 = set(tags1)
       length_book_1 = len(tags1)
@@ -79,6 +81,8 @@ def get_recommendation_item_basedUsu(user_id:int,books_df: pd.DataFrame,ratings_
   return list(comparation_df.sort_values(ascending=False ,by="rating")[:5]["id"])
 
 def get_recommendation_item_based(book_id:int,books_df: pd.DataFrame):
+  #gets recoommendation based only by the book
+  column = []
   column = []
 
   for index, book2 in books_df.iterrows():
@@ -92,8 +96,10 @@ def get_recommendation_item_based(book_id:int,books_df: pd.DataFrame):
     #merging the Sets
     final_score = 0
     to_read_score = 0
+    #Giving value to the books avarege raing 
     book_avg_rating_score = (book2['average_rating']/5)*0.3
     book = books_df.loc[books_df["id"] == book_id].iloc[0]
+    #Comparing tags groups from both groups 
     tags1 = book['tag_id']
     set1 = set(tags1)
     length_book_1 = len(tags1)
