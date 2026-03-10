@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: fastapi-monitor
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: fastapi-recommender
+  namespaceSelector:
+    matchNames:
+      - dev
+  endpoints:
+  - port: http-metrics  
+    path: /metrics
+    interval: 15s

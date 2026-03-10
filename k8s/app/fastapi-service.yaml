@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-recommender-svc
+  namespace: dev
+  labels:
+    app: fastapi-recommender
+    release: monitoring
+spec:
+  selector:
+    app: fastapi-recommender
+  ports:
+    - name: http-metrics  # <--- ADD THIS LINE (The string name)
+      protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: LoadBalancer

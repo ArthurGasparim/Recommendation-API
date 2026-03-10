@@ -1,0 +1,28 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: fastapi-rules
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+  - name: fastapi.rules
+    rules:
+    # Alert if request latency is high
+    - alert: HighRequestLatency
+      expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High Latency on {{ $labels.namespace }}"
+        description: "95th percentile latency is > 2s."
+
+    # Alert if endpoint fails
+    - alert: FastApiDown
+      expr: up{app="fastapi-recommender"} == 0
+      for: 1m
+      labels:
+        severity: criticalS
+        

@@ -9,8 +9,10 @@ from pydantic import BaseModel
 from recommender import create_useful_book_dataframe, get_recommendation_item_based,get_recommendation_user_based,get_recommendation_item_basedUsu
 import pandas as pd
 from sqlalchemy import text
+from prometheus_fastapi_instrumentator import Instrumentator
+from sqlmodel import SQLModel
 app = FastAPI()
-
+instrumentator = Instrumentator().instrument(app)
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
@@ -35,6 +37,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_load_data():
+    #exposing /metrics
+    print("Criando tabelas no banco de dados...")
+    SQLModel.metadata.create_all(engine)
+    instrumentator.expose(app)
     #On loanding the server, gets the db tables and converts them into databases for the recommendations
     with engine.connect() as conn:
         app.state.tags_df = pd.read_sql(select(Tags), conn)

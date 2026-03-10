@@ -1,0 +1,12 @@
+config:
+  outputs: |
+    [OUTPUT]
+        Name            es
+        Match           *
+        Host            elasticsearch-master.logging.svc.cluster.local
+        Port            9200
+        HTTP_User       elastic
+        HTTP_Passwd     <YOUR_ELASTIC_PASSWORD>
+        Replace_Dots    On
+        Retry_Limit     False
+        Suppress_Type_Name On
