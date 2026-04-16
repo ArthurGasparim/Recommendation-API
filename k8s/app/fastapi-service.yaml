@@ -6,11 +6,13 @@ metadata:
   labels:
     app: fastapi-recommender
     release: monitoring
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
 spec:
   selector:
     app: fastapi-recommender
   ports:
-    - name: http-metrics  # <--- ADD THIS LINE (The string name)
+    - name: http-metrics
       protocol: TCP
       port: 80
       targetPort: 5000

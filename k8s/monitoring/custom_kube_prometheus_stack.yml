@@ -18,17 +18,26 @@ alertmanager:
     alertmanagerConfigMatcherStrategy:
       type: None
 
-
-grafana:
-  grafana.ini:
-    server:
-      root_url: "%(protocol)s://%(domain)s:%(http_port)s/grafana"
-      serve_from_sub_path: true
-
 prometheus:
   prometheusSpec:
+    # Substitua pelo endereço real do seu Load Balancer depois de criado
+    externalUrl: "http://meu-alb-12345.us-east-1.elb.amazonaws.com/prometheus"
     routePrefix: /prometheus
 
 alertmanager:
   alertmanagerSpec:
+    externalUrl: "http://meu-alb-12345.us-east-1.elb.amazonaws.com/alertmanager"
     routePrefix: /alertmanager
+
+grafana:
+  grafana.ini:
+    server:
+      # O Grafana usa uma sintaxe levemente diferente, mas a lógica é a mesma
+      root_url: "%(protocol)s://%(domain)s:%(http_port)s/grafana"
+      serve_from_sub_path: true
+
+metadata:
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+spec:
+  ingressClassName: alb

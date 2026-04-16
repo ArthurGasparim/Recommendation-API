@@ -41,6 +41,7 @@ def startup_load_data():
     print("Criando tabelas no banco de dados...")
     SQLModel.metadata.create_all(engine)
     instrumentator.expose(app)
+    
     #On loanding the server, gets the db tables and converts them into databases for the recommendations
     with engine.connect() as conn:
         app.state.tags_df = pd.read_sql(select(Tags), conn)
@@ -48,21 +49,35 @@ def startup_load_data():
         app.state.books_tags_df = pd.read_sql(select(BooksTags), conn)
         app.state.books_df = pd.read_sql(select(Books), conn)
         app.state.ratings_df = pd.read_sql(select(Rating), conn)
+        
         #Generating the list of tags on final books_df
-        books_merge_tags = pd.merge(
-            app.state.books_df,
-            app.state.books_tags_df,
-            left_on="good_id",
-            right_on="goodreads_book_id",
-            how="inner",
-        )
-        tags_final = books_merge_tags.groupby("id")["tag_id"].agg(list)
-        app.state.books_df = pd.merge( app.state.books_df, tags_final, on="id", how="inner").drop(columns=["good_id"])
-        #Also crating the model on the  start of the server
-        #Generating the sparce matrix
-        app.state.rating_matrix = app.state.ratings_df.pivot_table(index='user_id', columns='book_id', values='rating').fillna(0)
-        #Applying th cosine similarity method
-        app.state.item_similarity = cosine_similarity(app.state.rating_matrix.T)
+        if not app.state.books_df.empty and not app.state.books_tags_df.empty:
+            books_merge_tags = pd.merge(
+                app.state.books_df,
+                app.state.books_tags_df,
+                left_on="good_id",
+                right_on="goodreads_book_id",
+                how="inner",
+            )
+            tags_final = books_merge_tags.groupby("id")["tag_id"].agg(list)
+            app.state.books_df = pd.merge(app.state.books_df, tags_final, on="id", how="inner").drop(columns=["good_id"])
+        
+        #Also crating the model on the start of the server
+        #Generating the sparce matrix conditionally
+        if not app.state.ratings_df.empty:
+            app.state.rating_matrix = app.state.ratings_df.pivot_table(index='user_id', columns='book_id', values='rating').fillna(0)
+            
+            # Verificando se a matriz resultante não está vazia
+            if app.state.rating_matrix.empty or app.state.rating_matrix.shape == (0, 0):
+                print("Aviso: Matriz sem amostras suficientes. Pulando cálculo de similaridade.")
+                app.state.item_similarity = None
+            else:
+                #Applying the cosine similarity method
+                app.state.item_similarity = cosine_similarity(app.state.rating_matrix.T)
+        else:
+            print("Aviso: Banco de dados de avaliações está vazio. Pulando cálculo de similaridade.")
+            app.state.rating_matrix = pd.DataFrame() # Cria um df vazio para evitar erros futuros
+            app.state.item_similarity = None
         
 
 #Very intuitive, clear all db tables
@@ -145,9 +160,13 @@ def getRecIB(id: int, session: SessionDep):
     return session.exec(statement).all()
 
 
-#Uses the modlel saved on the state variable to get the top 5 recommendations for the user
+#Uses the model saved on the state variable to get the top 5 recommendations for the user
 @app.get("/RecUB/{id}")
 def getRecUB(id: int, session: SessionDep):
+    # Proteção caso o banco esteja vazio e o modelo não tenha sido gerado
+    if app.state.item_similarity is None:
+        return {"message": "Dados insuficientes no banco para gerar recomendações baseadas no usuário no momento."}
+
     ids = get_recommendation_user_based(
         user_id=id,
         books_df=app.state.books_df,
@@ -155,8 +174,9 @@ def getRecUB(id: int, session: SessionDep):
         rating_matrix= app.state.rating_matrix,
         item_similarity= app.state.item_similarity
     ).astype(int).tolist()
+    
     statement = select(Books).where(Books.id.in_(ids))
-     #Selects from the Database the ids that were served
+    #Selects from the Database the ids that were served
     return session.exec(statement).all()
 
 #Returns all the books from the database, in the query le  you determine the limit of books, now is set for 100 books
