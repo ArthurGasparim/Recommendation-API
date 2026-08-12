@@ -20,15 +20,13 @@ function Home(){
     }
 
     function recommendacoesIB_usu(){
-        const idib = document.getElementById("idIBUsu").value;
-        api.get("/RecIBUsu/"+idib).then(resp =>{
+        api.get("/RecIBUsu/"+id).then(resp =>{
             atualizaIB(resp.data)
         })
     }
 
     function recommendacoesUB(){
-        const idub = document.getElementById("idUB").value;
-        api.get("/RecUB/"+idub).then(resp =>{
+        api.get("/RecUB/"+id).then(resp =>{
             atualizaUB(resp.data)
         })
     }
@@ -50,7 +48,7 @@ function Home(){
 
     return(
         <div style={{minHeight: "100vh", display: "flex", flexDirection: "column"}}>
-            <Header caminho={!id ? "usuario" : ""} admin={id==111}/>
+            <Header caminho={!id ? "usuario" : ""} admin={sessionStorage.getItem("isAdmin") === "true"}/>
             
             <Style.Container>
                 <Style.Section>
@@ -69,8 +67,7 @@ function Home(){
                     <Style.InputGroup>
                         <input id='idIB' type='number' placeholder="ID do Livro"/>
                         <button onClick={recommendacoesIB}>Buscar</button>
-                        <input id='idIBUsu' type='number' placeholder="ID do Usuario"/>
-                        <button onClick={recommendacoesIB_usu}>Buscar</button>
+                        <button disabled={!id} onClick={recommendacoesIB_usu}>Recomendar para mim</button>
                     </Style.InputGroup>
                     
                     {RecomendIB.length > 0 && (
@@ -87,8 +84,7 @@ function Home(){
                 <Style.Section>
                     <Style.SectionTitle>Recomendações User Based</Style.SectionTitle>
                     <Style.InputGroup>
-                        <input id='idUB' type='number' placeholder="ID do Usuário" />
-                        <button onClick={recommendacoesUB}>Buscar</button>
+                        <button disabled={!id} onClick={recommendacoesUB}>Recomendar para mim</button>
                     </Style.InputGroup>
                     
                     {RecomendUB.length > 0 && (

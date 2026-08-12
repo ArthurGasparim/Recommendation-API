@@ -15,9 +15,9 @@ function Books(){
         api.post("/createBook",{id:id, good_id:book_id, title:original_title, authors:authors, average_rating:average_rating,image_url:""})
         .then((resp)=>{
             alert(resp.data.alert); 
-            sessionStorage.setItem("newUserId", id);
-            window.location.href = "http://localhost:3000/home"
+            window.location.href = "/home"
         })
+        .catch((error)=>alert(error.response?.data?.detail || "Não foi possível cadastrar o livro"))
     }
 
     return(

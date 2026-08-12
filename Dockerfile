@@ -1,17 +1,24 @@
 FROM python:3.11-slim
 
-WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    SQLITE_DATABASE_PATH=/app/runtime/recommendation.db
 
-# Install system dependencies for pandas/scikit (if needed)
-RUN apt-get update && apt-get install -y gcc libpq-dev
+WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --home /app app \
+    && mkdir -p /app/runtime \
+    && chown app:app /app/runtime
+COPY --chown=app:app . .
 
-# Expose the port defined in your main.py (5000)
+USER app
 EXPOSE 5000
 
-# Run uvicorn directly for production
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)"
+
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]

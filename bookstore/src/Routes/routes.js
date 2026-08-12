@@ -3,6 +3,8 @@ import Home from '../Views/Home'
 import Usuario from '../Views/UserDetails'
 import Books from '../Views/BookDetails'
 import BookPage from '../Views/BookView'
+import Simulation from '../Views/Simulation'
+// ✅ Correto — sem basename, React na raiz /
 export default function Rotas(){
     return(
         <Router>
@@ -11,6 +13,7 @@ export default function Rotas(){
                 <Route path="/home" element={<Home/>}/>
                 <Route path="/livro" element={<Books/>}/>
                 <Route path="/Book/:book_id" element={<BookPage/>}/>
+                <Route path="/simulacoes" element={<Simulation/>}/>
             </Routes>
         </Router>
     )

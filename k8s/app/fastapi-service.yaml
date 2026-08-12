@@ -6,8 +6,6 @@ metadata:
   labels:
     app: fastapi-recommender
     release: monitoring
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
 spec:
   selector:
     app: fastapi-recommender
@@ -15,5 +13,5 @@ spec:
     - name: http-metrics
       protocol: TCP
       port: 80
-      targetPort: 5000
-  type: LoadBalancer
+      targetPort: http
+  type: ClusterIP

@@ -24,5 +24,4 @@ spec:
       expr: up{app="fastapi-recommender"} == 0
       for: 1m
       labels:
-        severity: criticalS
-        
+        severity: critical

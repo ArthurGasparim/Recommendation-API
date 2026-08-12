@@ -1,0 +1,13 @@
+.git
+.gitignore
+venv
+.venv
+__pycache__
+*.pyc
+node_modules
+bookstore
+k8s
+alteracoes
+backups
+recommendation.db
+

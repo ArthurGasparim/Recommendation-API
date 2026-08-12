@@ -1,9 +1,10 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: postgres-db
   namespace: dev
 spec:
+  serviceName: postgres-svc
   replicas: 1
   selector:
     matchLabels:
@@ -14,17 +15,66 @@ spec:
         app: postgres-db
     spec:
       containers:
-      - name: postgres
-        image: postgres:13
-        env:
-        - name: POSTGRES_USER
-          value: "postgres"
-        - name: POSTGRES_PASSWORD
-          value: "postgres123"
-        - name: POSTGRES_DB
-          value: "bookstore_db"
-        ports:
-        - containerPort: 5432
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: recommendation-secrets
+                  key: postgres-database
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: recommendation-secrets
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: recommendation-secrets
+                  key: postgres-password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          securityContext:
+            allowPrivilegeEscalation: false
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
 ---
 apiVersion: v1
 kind: Service
@@ -35,6 +85,8 @@ spec:
   selector:
     app: postgres-db
   ports:
-    - protocol: TCP
+    - name: postgres
+      protocol: TCP
       port: 5432
-      targetPort: 5432
+      targetPort: postgres
+  type: ClusterIP

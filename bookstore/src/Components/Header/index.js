@@ -1,6 +1,6 @@
 import * as Style from './style'
 import logo from '../../Assets/logo.jpg'
-import { FaUserCircle, FaBook, FaSignInAlt } from 'react-icons/fa';
+import { FaBook, FaChartLine, FaSignInAlt } from 'react-icons/fa';
 
 function Header({caminho, admin}){
     return(
@@ -18,9 +18,14 @@ function Header({caminho, admin}){
                         </a>
                     )}
                     {admin && (
-                        <a href='/livro'>
-                            <FaBook /> Cadastrar Livro
-                        </a>
+                        <>
+                            <a href='/simulacoes'>
+                                <FaChartLine /> Laboratório
+                            </a>
+                            <a href='/livro'>
+                                <FaBook /> Cadastrar Livro
+                            </a>
+                        </>
                     )}
                 </Style.Nav>
             </Style.Wrapper>

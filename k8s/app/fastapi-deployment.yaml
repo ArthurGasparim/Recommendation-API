@@ -7,6 +7,8 @@ metadata:
     app: fastapi-recommender
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       app: fastapi-recommender
@@ -14,15 +16,74 @@ spec:
     metadata:
       labels:
         app: fastapi-recommender
-    # ... resto do seu arquivo fastapi-deployment.yaml ...
     spec:
       containers:
-      - name: fastapi
-        image: 043309322198.dkr.ecr.us-east-1.amazonaws.com/fastapi-recommender:latest
-        ports:
-        - containerPort: 5000
-        imagePullPolicy: Always
-        # --- ADICIONE ESTA PARTE ---
-        env:
-        - name: DATABASE_URL
-          value: "postgresql://postgres:postgres123@postgres-svc:5432/bookstore_db"
+        - name: fastapi
+          image: 043309322198.dkr.ecr.us-east-1.amazonaws.com/fastapi-recommender:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          env:
+            - name: APP_ENV
+              value: production
+            - name: POSTGRES_HOST
+              value: postgres-svc
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: recommendation-secrets
+                  key: postgres-database
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: recommendation-secrets
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: recommendation-secrets
+                  key: postgres-password
+            - name: AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: recommendation-secrets
+                  key: auth-secret
+            - name: ADMIN_USER_IDS
+              valueFrom:
+                secretKeyRef:
+                  name: recommendation-secrets
+                  key: admin-user-ids
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL

@@ -5,13 +5,12 @@ metadata:
   namespace: dev
   labels:
     app: react-frontend
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
 spec:
   selector:
     app: react-frontend
   ports:
-    - protocol: TCP
+    - name: http
+      protocol: TCP
       port: 80
-      targetPort: 80
-  type: LoadBalancer
+      targetPort: http
+  type: ClusterIP

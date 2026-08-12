@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+.venv/
+recommendation.db
+
+# Node
+node_modules/
+bookstore/node_modules/
+bookstore/build/
+
+# Local configuration and backups
+.env
+.env.*
+!.env.example
+backups/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+.DS_Store
+

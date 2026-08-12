@@ -6,4 +6,5 @@ resources:
   - fastapi-service.yaml
   - react-deployment.yaml
   - react-service.yaml
-  - postgres.yaml       
+  - postgres.yaml
+  - ingress_dev.yaml

@@ -13,22 +13,11 @@ function BookPage(){
     const {book_id} = useParams()
     const [id, updateId] = useState()
 
-    function getBookData(){
-        api.get("/getBook/"+book_id).then(resp =>{
-            updateBook(resp.data)
-        })
-    }
-
     function submitRating(){
         if(rating){
             api.post("/rating",{book_id:book_id, user_id:id, rating:rating})
             .then(resp=>{alert("Rating cadastrada com sucesso")})
         }
-    }
-
-    function buyBook(){
-        api.post("/buy",{book_id:book_id, id:id})
-        window.location.href="http://localhost:3000/home"
     }
 
     function addTag(){
@@ -42,9 +31,11 @@ function BookPage(){
     }
 
     useEffect(()=>{
-        getBookData()
+        api.get("/getBook/"+book_id).then(resp =>{
+            updateBook(resp.data)
+        })
         updateId(sessionStorage.getItem("newUserId"))
-    },[])
+    },[book_id])
 
     function controlRead(value){
         updateRead(value)
@@ -108,7 +99,6 @@ function BookPage(){
                                 </label>
                             </Style.Card>
 
-                            <button className="buy-btn" onClick={buyBook}>Comprar Agora</button>
                         </Style.ActionSection>
                     </Style.Details>
                 </Style.ContentWrapper>

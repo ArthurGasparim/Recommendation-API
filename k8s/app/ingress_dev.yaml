@@ -1,0 +1,120 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  namespace: dev
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+spec:
+  ingressClassName: alb
+  rules:
+  - http:
+      paths:
+      - path: /createUser
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /createBook
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /all
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /RecIB
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /RecUB
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /RecIBUsu
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /rating
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /admin
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /recommendations
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /ready
+        pathType: Exact
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /tag
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /read
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /getBook
+        pathType: Prefix
+        backend:
+          service:
+            name: fastapi-recommender-svc
+            port:
+              number: 80
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: react-frontend-svc
+            port:
+              number: 80
