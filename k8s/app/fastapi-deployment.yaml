@@ -7,8 +7,12 @@ metadata:
     app: fastapi-recommender
 spec:
   replicas: 2
+  progressDeadlineSeconds: 600
   strategy:
     type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: fastapi-recommender
@@ -17,6 +21,9 @@ spec:
       labels:
         app: fastapi-recommender
     spec:
+      # Cargas de CSV e experimentos rodam após a resposta HTTP. Este prazo
+      # permite que o Uvicorn finalize a tarefa em um rollout controlado.
+      terminationGracePeriodSeconds: 300
       containers:
         - name: fastapi
           image: 043309322198.dkr.ecr.us-east-1.amazonaws.com/fastapi-recommender:1.0.0

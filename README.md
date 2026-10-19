@@ -19,8 +19,9 @@ Estão integrados:
 - Docker, Kustomize, Ingress ALB e persistência por PVC.
 
 Prometheus/Grafana constituem a base atual de métricas. Logging centralizado,
-Jaeger/OpenTelemetry e os experimentos científicos comparativos continuam nas
-próximas prioridades.
+Jaeger/OpenTelemetry continuam nas próximas prioridades. O laboratório já
+executa experimentos comparativos medidos sobre o snapshot real, além da
+simulação exploratória usada para planejar cenários.
 
 O levantamento completo está em
 [`alteracoes/RELATORIO_STATUS_ANTEPROJETO.md`](alteracoes/RELATORIO_STATUS_ANTEPROJETO.md).
@@ -88,6 +89,11 @@ Operações destrutivas e de manutenção ficam em:
 
 - `DELETE /admin/data`;
 - `POST /admin/load-test-data`;
+- `POST /admin/data/load` (carga assíncrona usada pelo painel);
+- `POST /admin/experiments/real/run`;
+- `POST /admin/experiments/real/suite`;
+- `GET /admin/experiments/real/suite/{job_id}/xlsx`;
+- `GET /admin/experiments/real/metrics`;
 - `POST /admin/recommendations/rebuild`.
 
 Todas exigem token administrativo. Os antigos `GET /clearTables` e
@@ -109,41 +115,79 @@ validação, atualização do modelo e fluxos integrados da API.
 Usuários administrativos acessam `http://localhost:3000/simulacoes` pelo item
 **Laboratório** do cabeçalho. A página permite:
 
+- carregar no PostgreSQL os CSVs Goodbooks empacotados na API;
+- executar ataques controlados sobre uma cópia do snapshot, sem alterar o banco;
+- escolher popularidade regularizada, conteúdo por tags ou item-item;
+- ativar ou desativar a detecção e a resposta orientada por observabilidade;
+- obter NDCG, Precision, Recall, hit rate, cobertura, latência, disponibilidade
+  e qualidade dos dados realmente medidos;
+- acompanhar as tarefas e consultar os resultados persistidos no PostgreSQL;
+- testar sequencialmente todos os modelos contra todos os ataques, nos modos
+  sem e com observabilidade;
+- baixar uma planilha XLSX com qualidade inicial, qualidade sem observabilidade,
+  qualidade com observabilidade, degradação detalhada dos dados e métricas
+  operacionais;
 - posicionar e sobrepor ataques em uma linha do tempo;
-- comparar popularidade, conteúdo TF-IDF, item-item, ALS e híbrido;
+- comparar modelos em cenários exploratórios de maior duração;
 - alternar entre sete métricas temporais;
 - comparar cada modelo sem defesa e com resposta orientada por observabilidade;
 - inspecionar detecção, perda acumulada, tempo abaixo do SLO e overhead;
 - usar presets de ataques coordenados, qualidade dos dados e infraestrutura.
 
-Os valores atuais são uma **simulação exploratória determinística**, identificada
-como tal na API e na interface. Eles servem para validar cenários, visualização e
-protocolo e não devem ser apresentados como resultados científicos medidos. O
-pipeline experimental substituirá os perfis sintéticos por baselines reais.
+O primeiro bloco da página produz resultados medidos. O painel temporal abaixo
+dele continua sendo uma **simulação exploratória determinística**, identificada
+como tal na API e na interface, e não deve ser apresentado como resultado
+científico medido.
+
+A bateria reutiliza o mesmo recorte e os três baselines, além de calcular o
+modelo por tags com uma matriz esparsa vetorizada. No cenário sem observabilidade,
+o lote atacado permanece bruto: dados inválidos, órfãos e duplicados aparecem na
+aba **Dados** do XLSX, em vez de serem sanitizados implicitamente.
 
 Endpoints administrativos:
 
+- `POST /admin/data/load`;
+- `GET /admin/jobs/{job_id}`;
+- `GET /admin/experiments/real/catalog`;
+- `POST /admin/experiments/real/run`;
+- `POST /admin/experiments/real/suite`;
+- `GET /admin/experiments/real/suite/{job_id}/xlsx`;
+- `GET /admin/experiments/real/metrics`;
 - `GET /admin/experiments/catalog`;
 - `POST /admin/experiments/simulate`.
 
-O documento técnico da entrega está em
-[`alteracoes/PRIORIDADE_1_SIMULADOR_IMPLEMENTADO.md`](alteracoes/PRIORIDADE_1_SIMULADOR_IMPLEMENTADO.md).
+O documento técnico do fluxo AWS está em
+[`alteracoes/LABORATORIO_REAL_AWS_IMPLEMENTADO.md`](alteracoes/LABORATORIO_REAL_AWS_IMPLEMENTADO.md).
 
-## EKS
+## EKS/AWS
 
-Antes da implantação, crie os segredos conforme
-[`k8s/app/README.md`](k8s/app/README.md). Depois:
+O script de implantação constrói as imagens, publica no ECR, aplica os manifests,
+instala o AWS Load Balancer Controller e, por padrão, Prometheus/Grafana. Ele não
+cria um cluster sem autorização explícita.
 
 ```bash
-kubectl apply -k k8s/app/
-kubectl apply -k k8s/monitoring/
+export DEPLOY_ADMIN_USER_IDS="1"
+export DEPLOY_POSTGRES_PASSWORD="troque-esta-senha"
+./scripts/deploy_aws.sh --create-cluster
 ```
 
+Se o cluster `observability` já estiver ativo, remova `--create-cluster`. Consulte
+as opções e o procedimento de segredos em [`k8s/app/README.md`](k8s/app/README.md).
+
 O PostgreSQL usa StatefulSet e PVC de 20 GiB. Antes do teardown, `cleanup.sh`
-faz backup local por padrão:
+faz backup local e remove todos os recursos AWS do projeto, incluindo EKS,
+ALBs, EBS, ECR, logs, VPCs residuais e IAM:
 
 ```bash
 ./cleanup.sh
+```
+
+O script exige a confirmação `DESTRUIR observability`. Ao terminar, ele executa
+uma auditoria e retorna erro se ainda encontrar algum recurso do projeto. A
+auditoria também pode ser repetida sem alterar a AWS:
+
+```bash
+./cleanup.sh --audit-only
 ```
 
 Backups ficam em `backups/` e podem ser restaurados com:
@@ -152,5 +196,7 @@ Backups ficam em `backups/` e podem ser restaurados com:
 ./scripts/restore_database.sh backups/bookstore-AAAAMMDDTHHMMSSZ.dump
 ```
 
-`cleanup.sh` preserva ECR, política IAM, kubeconfig e cache Docker. A exclusão de
-ECR/IAM precisa ser solicitada por flags explícitas; consulte `./cleanup.sh -h`.
+O kubeconfig, os backups e as imagens Docker locais são preservados porque não
+geram cobrança AWS. Se o PostgreSQL estiver indisponível, o teardown para antes
+da destruição; `--skip-backup` só deve ser usado quando a perda dos dados for
+aceita explicitamente. Consulte [`alteracoes/DESTRUICAO_AWS_IMPLEMENTADA.md`](alteracoes/DESTRUICAO_AWS_IMPLEMENTADA.md).

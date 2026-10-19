@@ -122,6 +122,53 @@ const simulation = {
     }],
 }
 
+const measuredCatalog = {
+    kind: 'measured_experiment',
+    disclaimer: 'Métricas medidas sobre uma cópia controlada do snapshot real.',
+    models: [{id: 'item_item', label: 'Colaborativo item-item', description: 'Modelo real'}],
+    attacks: [{id: 'push_attack', label: 'Push attack', description: 'Ataque controlado'}],
+    default_request: {
+        model: 'item_item',
+        attack_type: 'push_attack',
+        with_observability: true,
+        intensity: 0.05,
+        seed: 42,
+        sample_users: 20,
+        top_k: 10,
+        target_book_id: null,
+    },
+    suite: {
+        models: 3,
+        attacks: 6,
+        comparisons: 18,
+        scenario_runs: 36,
+        default_request: {
+            intensity: 0.05,
+            seed: 42,
+            sample_users: 20,
+            top_k: 10,
+            target_book_id: null,
+        },
+    },
+}
+
+const measuredMetrics = {
+    kind: 'measured_metrics',
+    dataset: {books: 10000, ratings: 979478, tags: 34252, book_tags: 999904, to_read: 912705},
+    latest: null,
+    latest_suite: null,
+    runs: [],
+}
+
+const completedJob = {
+    id: 'job-1',
+    kind: 'real_experiment',
+    status: 'completed',
+    progress: 100,
+    message: 'Experimento medido concluído',
+    result: {kind: 'measured_experiment'},
+}
+
 beforeEach(() => {
     jest.clearAllMocks()
     sessionStorage.clear()
@@ -135,17 +182,112 @@ test('exibe restrição quando o usuário não é administrador', () => {
 
 test('carrega o cenário, deixa claro que é sintético e executa nova comparação', async () => {
     sessionStorage.setItem('isAdmin', 'true')
-    api.get.mockResolvedValue({data: catalog})
-    api.post.mockResolvedValue({data: simulation})
+    api.get.mockImplementation(path => {
+        if (path === '/admin/experiments/catalog') return Promise.resolve({data: catalog})
+        if (path === '/admin/experiments/real/catalog') return Promise.resolve({data: measuredCatalog})
+        if (path === '/admin/experiments/real/metrics') return Promise.resolve({data: measuredMetrics})
+        return Promise.resolve({data: completedJob})
+    })
+    api.post.mockImplementation(path => {
+        if (path === '/admin/experiments/simulate') return Promise.resolve({data: simulation})
+        return Promise.resolve({data: {...completedJob, status: 'queued', progress: 0}})
+    })
 
     render(<Simulation/>)
 
     expect(await screen.findByRole('heading', {name: /Laboratório de Resiliência/i})).toBeInTheDocument()
     expect(screen.getByText(/Não representam resultados medidos/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Carregar dados dos CSVs/i})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Executar ataque/i})).toBeEnabled()
     expect(screen.getByRole('img', {name: /NDCG@10 ao longo da simulação/i})).toBeInTheDocument()
     expect(screen.getAllByText('66.7%')).toHaveLength(2)
 
     fireEvent.click(screen.getByRole('button', {name: /Executar comparação/i}))
     await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2))
     expect(api.post.mock.calls[1][0]).toBe('/admin/experiments/simulate')
+})
+
+test('executa ataque medido e acompanha a tarefa persistida', async () => {
+    sessionStorage.setItem('isAdmin', 'true')
+    let jobPolls = 0
+    api.get.mockImplementation(path => {
+        if (path === '/admin/experiments/catalog') return Promise.resolve({data: catalog})
+        if (path === '/admin/experiments/real/catalog') return Promise.resolve({data: measuredCatalog})
+        if (path === '/admin/experiments/real/metrics') return Promise.resolve({data: measuredMetrics})
+        if (path === '/admin/jobs/job-1') {
+            jobPolls += 1
+            if (jobPolls === 1) return Promise.reject({response: {status: 503}})
+            return Promise.resolve({data: completedJob})
+        }
+        return Promise.reject(new Error(`GET inesperado: ${path}`))
+    })
+    api.post.mockImplementation(path => {
+        if (path === '/admin/experiments/simulate') return Promise.resolve({data: simulation})
+        if (path === '/admin/experiments/real/run') {
+            return Promise.resolve({data: {...completedJob, status: 'queued', progress: 0}})
+        }
+        return Promise.reject(new Error(`POST inesperado: ${path}`))
+    })
+
+    render(<Simulation/>)
+
+    const button = await screen.findByRole('button', {name: /Executar ataque/i})
+    fireEvent.click(button)
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith(
+        '/admin/experiments/real/run',
+        measuredCatalog.default_request,
+    ))
+    await waitFor(() => expect(jobPolls).toBe(2), {timeout: 3000})
+    expect(await screen.findByText(/Experimento medido concluído/i, {}, {timeout: 3000})).toBeInTheDocument()
+})
+
+test('executa a bateria completa e baixa a planilha XLSX', async () => {
+    sessionStorage.setItem('isAdmin', 'true')
+    const suiteJob = {
+        id: 'suite-1',
+        kind: 'real_experiment_suite',
+        status: 'completed',
+        progress: 100,
+        message: 'Bateria completa concluída; planilha disponível',
+        result: {kind: 'measured_experiment_suite'},
+    }
+    const createObjectURL = jest.fn(() => 'blob:planilha')
+    const revokeObjectURL = jest.fn()
+    Object.defineProperty(window.URL, 'createObjectURL', {value: createObjectURL, configurable: true})
+    Object.defineProperty(window.URL, 'revokeObjectURL', {value: revokeObjectURL, configurable: true})
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    api.get.mockImplementation((path, config) => {
+        if (path === '/admin/experiments/catalog') return Promise.resolve({data: catalog})
+        if (path === '/admin/experiments/real/catalog') return Promise.resolve({data: measuredCatalog})
+        if (path === '/admin/experiments/real/metrics') return Promise.resolve({data: measuredMetrics})
+        if (path === '/admin/jobs/suite-1') return Promise.resolve({data: suiteJob})
+        if (path === '/admin/experiments/real/suite/suite-1/xlsx') {
+            expect(config).toEqual({responseType: 'blob'})
+            return Promise.resolve({data: new Blob(['xlsx'])})
+        }
+        return Promise.reject(new Error(`GET inesperado: ${path}`))
+    })
+    api.post.mockImplementation(path => {
+        if (path === '/admin/experiments/simulate') return Promise.resolve({data: simulation})
+        if (path === '/admin/experiments/real/suite') {
+            return Promise.resolve({data: {...suiteJob, status: 'queued', progress: 0}})
+        }
+        return Promise.reject(new Error(`POST inesperado: ${path}`))
+    })
+
+    render(<Simulation/>)
+    const button = await screen.findByRole('button', {name: /Testar todos e gerar XLSX/i})
+    fireEvent.click(button)
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith(
+        '/admin/experiments/real/suite',
+        measuredCatalog.suite.default_request,
+    ))
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:planilha')
+    expect(await screen.findByText(/Bateria completa concluída/i)).toBeInTheDocument()
+    clickSpy.mockRestore()
 })

@@ -1,6 +1,8 @@
 import pandas as pd
+from sqlmodel import Session
 
 import main
+from db.db import AdminJob, engine
 from tests.conftest import authenticate
 
 
@@ -114,13 +116,15 @@ def test_end_to_end_interactions_and_recommendations(client):
 def test_admin_test_data_load_uses_validated_protected_endpoint(client, monkeypatch):
     admin_headers = authenticate(client, 1)
     user_headers = authenticate(client, 2)
+    long_authors = ", ".join(f"Author {index}" for index in range(70))
+    assert len(long_authors) > 500
     sources = {
         "books.csv": pd.DataFrame(
             {
                 "id": [10, 20],
                 "book_id": [110, 120],
                 "original_title": ["Book 10", "Book 20"],
-                "authors": ["Author", "Author"],
+                "authors": [long_authors, "Author"],
                 "average_rating": [4.5, 4.0],
                 "image_url": ["", ""],
             }
@@ -154,6 +158,16 @@ def test_admin_test_data_load_uses_validated_protected_endpoint(client, monkeypa
     assert response.json()["ratings"] == 2
     assert response.json()["book_tags"] == 2
     assert len(client.get("/all").json()) == 2
+    assert client.get("/getBook/10").json()["authors"] == long_authors
+
+    queued = client.post("/admin/data/load", headers=admin_headers)
+    assert queued.status_code == 202, queued.text
+    job = client.get(
+        f"/admin/jobs/{queued.json()['id']}", headers=admin_headers
+    )
+    assert job.status_code == 200
+    assert job.json()["status"] == "completed"
+    assert job.json()["result"]["ratings"] == 2
 
 
 def test_experiment_simulator_is_admin_only_and_does_not_mutate_domain_data(client):
@@ -182,3 +196,61 @@ def test_experiment_simulator_is_admin_only_and_does_not_mutate_domain_data(clie
     assert len(result["series"]) == 2
     assert result["comparison"][0]["quality_loss_reduction_percent"] > 0
     assert client.get("/all").json() == []
+
+    assert client.get("/admin/experiments/real/catalog").status_code == 401
+    assert (
+        client.get(
+            "/admin/experiments/real/catalog", headers=user_headers
+        ).status_code
+        == 403
+    )
+    real_catalog = client.get(
+        "/admin/experiments/real/catalog", headers=admin_headers
+    )
+    assert real_catalog.status_code == 200
+    assert real_catalog.json()["kind"] == "measured_experiment"
+    assert len(real_catalog.json()["models"]) == 3
+    assert real_catalog.json()["suite"]["comparisons"] == 18
+    assert real_catalog.json()["suite"]["scenario_runs"] == 36
+
+    measured = client.get(
+        "/admin/experiments/real/metrics", headers=admin_headers
+    )
+    assert measured.status_code == 200
+    assert measured.json()["latest"] is None
+    assert measured.json()["dataset"]["ratings"] == 0
+
+    cannot_run = client.post(
+        "/admin/experiments/real/run",
+        headers=admin_headers,
+        json=real_catalog.json()["default_request"],
+    )
+    assert cannot_run.status_code == 409
+    cannot_run_suite = client.post(
+        "/admin/experiments/real/suite",
+        headers=admin_headers,
+        json=real_catalog.json()["suite"]["default_request"],
+    )
+    assert cannot_run_suite.status_code == 409
+
+
+def test_real_jobs_are_cluster_wide_exclusive(client):
+    admin_headers = authenticate(client, 1)
+    with Session(engine) as session:
+        session.add(
+            AdminJob(
+                id="active-real-experiment",
+                kind="real_experiment",
+                status="running",
+                progress=20,
+                message="Experimento em execução",
+                requested_by=1,
+                request_json="{}",
+            )
+        )
+        session.commit()
+
+    response = client.post("/admin/data/load", headers=admin_headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["job_id"] == "active-real-experiment"

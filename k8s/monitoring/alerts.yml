@@ -25,3 +25,32 @@ spec:
       for: 1m
       labels:
         severity: critical
+      annotations:
+        summary: "Recommendation API indisponível"
+        description: "O Prometheus não consegue coletar métricas da API há mais de 1 minuto."
+
+    - alert: RecommendationAdminJobFailed
+      expr: increase(recommendation_admin_jobs_total{status="failed"}[10m]) > 0
+      labels:
+        severity: warning
+      annotations:
+        summary: "Tarefa administrativa falhou"
+        description: "Uma carga de CSV ou um experimento medido falhou nos últimos 10 minutos."
+
+    - alert: RecommendationExperimentLowDataQuality
+      expr: recommendation_experiment_data_quality_ratio < 0.98
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Qualidade de dados degradada no experimento"
+        description: "O último cenário medido apresentou qualidade inferior a 98%."
+
+    - alert: RecommendationExperimentHighLatency
+      expr: recommendation_experiment_latency_p95_milliseconds > 2000
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Latência elevada no experimento"
+        description: "A latência p95 medida no último experimento ultrapassou 2 segundos."

@@ -4,10 +4,14 @@ import {
     FaChartLine,
     FaCheckCircle,
     FaClock,
+    FaDatabase,
+    FaDownload,
     FaExclamationTriangle,
+    FaFileExcel,
     FaFlask,
     FaPlay,
     FaPlus,
+    FaSync,
     FaShieldAlt,
     FaTrash,
 } from 'react-icons/fa'
@@ -40,6 +44,13 @@ const PRESETS = {
             ['dependency_outage', 0.62, 0.15, 0.78],
         ],
     },
+}
+
+const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+
+function formatMeasured(value, digits = 3) {
+    if (!Number.isFinite(Number(value))) return '—'
+    return Number(value).toFixed(digits)
 }
 
 function buildPreset(preset, duration) {
@@ -107,6 +118,12 @@ function Simulation() {
     const [focusedModel, setFocusedModel] = useState('hybrid')
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
+    const [realCatalog, setRealCatalog] = useState(null)
+    const [realForm, setRealForm] = useState(null)
+    const [realMetrics, setRealMetrics] = useState(null)
+    const [activeJob, setActiveJob] = useState(null)
+    const [realBusy, setRealBusy] = useState('')
+    const [realError, setRealError] = useState('')
 
     useEffect(() => {
         if (!isAdmin) return undefined
@@ -114,10 +131,17 @@ function Simulation() {
         async function initialize() {
             try {
                 setLoading(true)
-                const response = await api.get('/admin/experiments/catalog')
+                const [response, measuredCatalog, metrics] = await Promise.all([
+                    api.get('/admin/experiments/catalog'),
+                    api.get('/admin/experiments/real/catalog'),
+                    api.get('/admin/experiments/real/metrics'),
+                ])
                 if (!active) return
                 setCatalog(response.data)
                 setForm(response.data.default_request)
+                setRealCatalog(measuredCatalog.data)
+                setRealForm(measuredCatalog.data.default_request)
+                setRealMetrics(metrics.data)
                 const simulation = await api.post(
                     '/admin/experiments/simulate',
                     response.data.default_request,
@@ -132,6 +156,129 @@ function Simulation() {
         initialize()
         return () => { active = false }
     }, [isAdmin])
+
+    async function refreshMeasuredMetrics() {
+        try {
+            setRealBusy('metrics')
+            setRealError('')
+            const response = await api.get('/admin/experiments/real/metrics')
+            setRealMetrics(response.data)
+            return response.data
+        } catch (requestError) {
+            setRealError(requestError.response?.data?.detail || 'Não foi possível obter as métricas medidas')
+            return null
+        } finally {
+            setRealBusy('')
+        }
+    }
+
+    async function pollJob(jobId) {
+        let consecutiveFailures = 0
+        for (let attempt = 0; attempt < 3600; attempt += 1) {
+            try {
+                const response = await api.get(`/admin/jobs/${jobId}`)
+                consecutiveFailures = 0
+                setActiveJob(response.data)
+                if (response.data.status === 'completed') return response.data
+                if (response.data.status === 'failed') {
+                    throw new Error(response.data.error || response.data.message || 'A tarefa falhou')
+                }
+            } catch (requestError) {
+                // Uma carga grande pode provocar uma falha transitória no
+                // SQLite local; no EKS também podem ocorrer trocas de pod/ALB.
+                // O job está persistido, portanto é seguro retomar a consulta.
+                if (!requestError.response || requestError.response.status >= 500) {
+                    consecutiveFailures += 1
+                    if (consecutiveFailures < 10) {
+                        await wait(Math.min(1000 * consecutiveFailures, 5000))
+                        continue
+                    }
+                }
+                throw requestError
+            }
+            await wait(1000)
+        }
+        throw new Error('A tarefa excedeu o tempo máximo de acompanhamento')
+    }
+
+    async function loadCsvData() {
+        try {
+            setRealBusy('load')
+            setRealError('')
+            const response = await api.post('/admin/data/load')
+            setActiveJob(response.data)
+            await pollJob(response.data.id)
+            await refreshMeasuredMetrics()
+        } catch (requestError) {
+            const detail = requestError.response?.data?.detail
+            setRealError(typeof detail === 'string' ? detail : requestError.message || 'Não foi possível carregar os CSVs')
+        } finally {
+            setRealBusy('')
+        }
+    }
+
+    async function runMeasuredExperiment() {
+        try {
+            setRealBusy('experiment')
+            setRealError('')
+            const response = await api.post('/admin/experiments/real/run', realForm)
+            setActiveJob(response.data)
+            await pollJob(response.data.id)
+            await refreshMeasuredMetrics()
+        } catch (requestError) {
+            const detail = requestError.response?.data?.detail
+            const message = typeof detail === 'object' ? detail?.message : detail
+            setRealError(message || requestError.message || 'Não foi possível executar o ataque controlado')
+        } finally {
+            setRealBusy('')
+        }
+    }
+
+    async function downloadSuite(jobId) {
+        try {
+            setRealError('')
+            const response = await api.get(
+                `/admin/experiments/real/suite/${jobId}/xlsx`,
+                {responseType: 'blob'},
+            )
+            const downloadUrl = window.URL.createObjectURL(response.data)
+            const link = document.createElement('a')
+            link.href = downloadUrl
+            link.download = `comparacao-observabilidade-${jobId}.xlsx`
+            document.body.appendChild(link)
+            link.click()
+            link.remove()
+            window.URL.revokeObjectURL(downloadUrl)
+        } catch (requestError) {
+            const detail = requestError.response?.data?.detail
+            setRealError(typeof detail === 'string' ? detail : 'Não foi possível baixar a planilha')
+        }
+    }
+
+    async function runFullSuite() {
+        try {
+            setRealBusy('suite')
+            setRealError('')
+            const request = {
+                intensity: realForm.intensity,
+                seed: realForm.seed,
+                sample_users: realForm.sample_users,
+                top_k: realForm.top_k,
+                target_book_id: realForm.target_book_id,
+            }
+            const response = await api.post('/admin/experiments/real/suite', request)
+            setActiveJob(response.data)
+            const completed = await pollJob(response.data.id)
+            await refreshMeasuredMetrics()
+            await downloadSuite(completed.id)
+        } catch (requestError) {
+            const detail = requestError.response?.data?.detail
+            const message = typeof detail === 'object' ? detail?.message : detail
+            setRealError(message || requestError.message || 'Não foi possível executar a bateria completa')
+        } finally {
+            setRealBusy('')
+        }
+    }
 
     const modelMap = useMemo(() => Object.fromEntries(
         (catalog?.models || []).map(model => [model.id, model]),
@@ -245,7 +392,7 @@ function Simulation() {
         )
     }
 
-    if (!catalog || !form) {
+    if (!catalog || !form || !realCatalog || !realForm) {
         return (
             <Style.Page>
                 <Header admin/>
@@ -262,25 +409,182 @@ function Simulation() {
             ? item : best
     ), result.comparison[0])
     const metric = metricMap[selectedMetric]
+    const measuredLatest = realMetrics?.latest
+    const measuredDataset = realMetrics?.dataset || {}
+    const latestSuite = realMetrics?.latest_suite
+    const realAttack = realCatalog.attacks.find(option => option.id === realForm.attack_type)
+    const realModel = realCatalog.models.find(option => option.id === realForm.model)
 
     return (
         <Style.Page>
             <Header admin/>
             <Style.Hero>
-                <div className="eyebrow"><FaFlask/> SIMULAÇÃO EXPLORATÓRIA</div>
+                <div className="eyebrow"><FaFlask/> EXPERIMENTO MEDIDO + SIMULAÇÃO EXPLORATÓRIA</div>
                 <div className="hero-grid">
                     <div>
                         <h1>Laboratório de Resiliência</h1>
-                        <p>Programe ataques no tempo, compare recomendadores e observe a diferença entre operar sem defesa e responder com sinais de observabilidade.</p>
+                        <p>Carregue o Goodbooks no PostgreSQL, execute um ataque seguro sobre uma cópia do snapshot e recupere métricas reais sem corromper o banco principal.</p>
                     </div>
                     <div className="hero-status">
-                        <span><FaCheckCircle/> Motor determinístico</span>
-                        <span><FaShieldAlt/> Comparação pareada</span>
-                        <span><FaChartLine/> Sete métricas temporais</span>
+                        <span><FaCheckCircle/> Resultados persistidos</span>
+                        <span><FaShieldAlt/> Snapshot principal protegido</span>
+                        <span><FaChartLine/> Métricas no Prometheus</span>
                     </div>
                 </div>
-                <div className="disclaimer"><FaExclamationTriangle/> {catalog.disclaimer}</div>
+                <div className="disclaimer"><FaExclamationTriangle/> {realCatalog.disclaimer} O painel temporal abaixo permanece exploratório: {catalog.disclaimer}</div>
             </Style.Hero>
+
+            <Style.RealLab>
+                <Style.RealHeader>
+                    <div>
+                        <span>FLUXO REAL NA AWS</span>
+                        <h2>Carga, ataque controlado e métricas</h2>
+                        <p>As tarefas são executadas em segundo plano e ficam registradas no PostgreSQL, inclusive quando a API possui mais de uma réplica.</p>
+                    </div>
+                    <button type="button" onClick={refreshMeasuredMetrics} disabled={Boolean(realBusy)}>
+                        <FaDownload/> {realBusy === 'metrics' ? 'Atualizando…' : 'Obter métricas'}
+                    </button>
+                </Style.RealHeader>
+
+                <Style.RealActions>
+                    <Style.RealCard>
+                        <div className="card-title"><FaDatabase/><div><b>1. Dados de teste</b><small>CSVs empacotados na API</small></div></div>
+                        <div className="dataset-counts">
+                            <span><b>{Number(measuredDataset.books || 0).toLocaleString('pt-BR')}</b> livros</span>
+                            <span><b>{Number(measuredDataset.ratings || 0).toLocaleString('pt-BR')}</b> avaliações</span>
+                        </div>
+                        <button type="button" className="primary" onClick={loadCsvData} disabled={Boolean(realBusy)}>
+                            <FaDatabase/> {realBusy === 'load' ? 'Carregando…' : 'Carregar dados dos CSVs'}
+                        </button>
+                    </Style.RealCard>
+
+                    <Style.RealCard>
+                        <div className="card-title"><FaBolt/><div><b>2. Ataque real controlado</b><small>{realAttack?.description}</small></div></div>
+                        <div className="form-grid">
+                            <label>Modelo
+                                <select value={realForm.model} onChange={event => setRealForm(current => ({...current, model: event.target.value}))}>
+                                    {realCatalog.models.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+                                </select>
+                            </label>
+                            <label>Ataque
+                                <select value={realForm.attack_type} onChange={event => setRealForm(current => ({...current, attack_type: event.target.value}))}>
+                                    {realCatalog.attacks.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+                                </select>
+                            </label>
+                            <label>Usuários avaliados
+                                <input type="number" min="5" max="100" value={realForm.sample_users} onChange={event => setRealForm(current => ({...current, sample_users: Number(event.target.value)}))}/>
+                            </label>
+                            <label>Seed
+                                <input type="number" min="0" value={realForm.seed} onChange={event => setRealForm(current => ({...current, seed: Number(event.target.value)}))}/>
+                            </label>
+                        </div>
+                        <label className="real-intensity">
+                            <span>Intensidade <b>{Math.round(realForm.intensity * 100)}%</b></span>
+                            <input type="range" min="0.01" max="0.30" step="0.01" value={realForm.intensity} onChange={event => setRealForm(current => ({...current, intensity: Number(event.target.value)}))}/>
+                        </label>
+                        <Style.ModeToggle>
+                            <button type="button" className={!realForm.with_observability ? 'active danger' : ''} onClick={() => setRealForm(current => ({...current, with_observability: false}))}>Sem observabilidade</button>
+                            <button type="button" className={realForm.with_observability ? 'active safe' : ''} onClick={() => setRealForm(current => ({...current, with_observability: true}))}><FaShieldAlt/> Com observabilidade</button>
+                        </Style.ModeToggle>
+                        <button type="button" className="primary attack" onClick={runMeasuredExperiment} disabled={Boolean(realBusy) || !measuredDataset.ratings}>
+                            <FaPlay/> {realBusy === 'experiment' ? 'Executando…' : 'Executar ataque'}
+                        </button>
+                    </Style.RealCard>
+
+                    <Style.RealCard>
+                        <div className="card-title"><FaChartLine/><div><b>3. Resultado medido</b><small>{realModel?.label}</small></div></div>
+                        {measuredLatest ? (
+                            <Style.MiniMetrics>
+                                <span><small>NDCG@{measuredLatest.method.top_k}</small><b>{formatMeasured(measuredLatest.measured.ndcg_at_k)}</b></span>
+                                <span><small>Latência p95</small><b>{formatMeasured(measuredLatest.measured.latency_p95_ms, 1)} ms</b></span>
+                                <span><small>Disponibilidade</small><b>{formatMeasured(measuredLatest.measured.availability_percent, 1)}%</b></span>
+                                <span><small>Qualidade dos dados</small><b>{formatMeasured(measuredLatest.data_quality.effective.quality_score * 100, 1)}%</b></span>
+                            </Style.MiniMetrics>
+                        ) : <Style.NoMetrics>Nenhuma execução medida. Carregue os dados e execute um ataque.</Style.NoMetrics>}
+                        <button type="button" onClick={refreshMeasuredMetrics} disabled={Boolean(realBusy)}><FaSync/> Atualizar métricas</button>
+                    </Style.RealCard>
+                </Style.RealActions>
+
+                <Style.SuitePanel>
+                    <div className="suite-icon"><FaFileExcel/></div>
+                    <div className="suite-copy">
+                        <span>BATERIA COMPLETA</span>
+                        <h3>Todos os modelos × todos os ataques</h3>
+                        <p>
+                            Executa em sequência {realCatalog.suite?.models || realCatalog.models.length} modelos ×{' '}
+                            {realCatalog.suite?.attacks || realCatalog.attacks.length} ataques, sempre sem e com observabilidade,
+                            e consolida qualidade inicial, qualidade atacada e qualidade protegida em um XLSX.
+                        </p>
+                    </div>
+                    <div className="suite-stats">
+                        <b>{realCatalog.suite?.comparisons || realCatalog.models.length * realCatalog.attacks.length}</b>
+                        <span>comparações</span>
+                        <b>{realCatalog.suite?.scenario_runs || realCatalog.models.length * realCatalog.attacks.length * 2}</b>
+                        <span>execuções</span>
+                    </div>
+                    <div className="suite-actions">
+                        <button
+                            type="button"
+                            className="run-suite"
+                            onClick={runFullSuite}
+                            disabled={Boolean(realBusy) || !measuredDataset.ratings}
+                        >
+                            <FaPlay/> {realBusy === 'suite' ? 'Executando bateria…' : 'Testar todos e gerar XLSX'}
+                        </button>
+                        {latestSuite && (
+                            <button
+                                type="button"
+                                className="download-suite"
+                                onClick={() => downloadSuite(latestSuite.id)}
+                                disabled={realBusy === 'suite'}
+                            >
+                                <FaFileExcel/> Baixar último XLSX
+                            </button>
+                        )}
+                    </div>
+                </Style.SuitePanel>
+
+                {activeJob && (
+                    <Style.JobStatus className={activeJob.status}>
+                        <div><b>{activeJob.message}</b><span>{activeJob.progress}% · tarefa {activeJob.id}</span></div>
+                        <progress max="100" value={activeJob.progress}/>
+                    </Style.JobStatus>
+                )}
+                {realError && <Style.Error role="alert">{realError}</Style.Error>}
+
+                {measuredLatest && (
+                    <Style.MeasuredDetails>
+                        <Style.ResultHeader>
+                            <div><span>ÚLTIMA EXECUÇÃO MEDIDA</span><h2>{measuredLatest.attack.type} · {measuredLatest.configuration.with_observability ? 'com observabilidade' : 'sem observabilidade'}</h2><p>Run ID: {measuredLatest.run_id}</p></div>
+                            <div className="seed">SEED <b>{measuredLatest.method.seed}</b></div>
+                        </Style.ResultHeader>
+                        <Style.KpiGrid>
+                            <Style.KpiCard><span>NDCG baseline</span><strong>{formatMeasured(measuredLatest.baseline.ndcg_at_k)}</strong><small>{measuredLatest.configuration.model}</small></Style.KpiCard>
+                            <Style.KpiCard className={measuredLatest.deltas.ndcg_at_k >= 0 ? 'green' : ''}><span>NDCG após ataque/resposta</span><strong>{formatMeasured(measuredLatest.measured.ndcg_at_k)}</strong><small>Δ {formatMeasured(measuredLatest.deltas.ndcg_at_k)}</small></Style.KpiCard>
+                            <Style.KpiCard><span>Detecção</span><strong>{measuredLatest.observability.detected ? 'SIM' : 'NÃO'}</strong><small>{measuredLatest.observability.detection_ms ? `${measuredLatest.observability.detection_ms} ms` : 'desativada'}</small></Style.KpiCard>
+                            <Style.KpiCard><span>Tempo total</span><strong>{formatMeasured(measuredLatest.timing.total_seconds, 1)}<em> s</em></strong><small>{measuredLatest.dataset.evaluation_users} usuários</small></Style.KpiCard>
+                        </Style.KpiGrid>
+                        <Style.MeasurementTable>
+                            <table><thead><tr><th>Métrica</th><th>Baseline</th><th>Medido</th><th>Variação</th></tr></thead><tbody>
+                                <tr><td>NDCG@{measuredLatest.method.top_k}</td><td>{formatMeasured(measuredLatest.baseline.ndcg_at_k)}</td><td>{formatMeasured(measuredLatest.measured.ndcg_at_k)}</td><td>{formatMeasured(measuredLatest.deltas.ndcg_at_k)}</td></tr>
+                                <tr><td>Precision@{measuredLatest.method.top_k}</td><td>{formatMeasured(measuredLatest.baseline.precision_at_k)}</td><td>{formatMeasured(measuredLatest.measured.precision_at_k)}</td><td>—</td></tr>
+                                <tr><td>Recall@{measuredLatest.method.top_k}</td><td>{formatMeasured(measuredLatest.baseline.recall_at_k)}</td><td>{formatMeasured(measuredLatest.measured.recall_at_k)}</td><td>—</td></tr>
+                                <tr><td>Hit rate@{measuredLatest.method.top_k}</td><td>{formatMeasured(measuredLatest.baseline.hit_rate_at_k)}</td><td>{formatMeasured(measuredLatest.measured.hit_rate_at_k)}</td><td>—</td></tr>
+                                <tr><td>Cobertura do catálogo</td><td>{formatMeasured(measuredLatest.baseline.catalog_coverage)}</td><td>{formatMeasured(measuredLatest.measured.catalog_coverage)}</td><td>—</td></tr>
+                                <tr><td>Latência p50</td><td>{formatMeasured(measuredLatest.baseline.latency_p50_ms, 1)} ms</td><td>{formatMeasured(measuredLatest.measured.latency_p50_ms, 1)} ms</td><td>—</td></tr>
+                                <tr><td>Latência p95</td><td>{formatMeasured(measuredLatest.baseline.latency_p95_ms, 1)} ms</td><td>{formatMeasured(measuredLatest.measured.latency_p95_ms, 1)} ms</td><td>{formatMeasured(measuredLatest.deltas.latency_p95_overhead_percent, 1)}%</td></tr>
+                                <tr><td>Latência p99</td><td>{formatMeasured(measuredLatest.baseline.latency_p99_ms, 1)} ms</td><td>{formatMeasured(measuredLatest.measured.latency_p99_ms, 1)} ms</td><td>—</td></tr>
+                                <tr><td>Disponibilidade</td><td>{formatMeasured(measuredLatest.baseline.availability_percent, 1)}%</td><td>{formatMeasured(measuredLatest.measured.availability_percent, 1)}%</td><td>{formatMeasured(measuredLatest.deltas.availability_percentage_points, 1)} p.p.</td></tr>
+                                <tr><td>Requisições com falha</td><td>{measuredLatest.baseline.failed_requests}</td><td>{measuredLatest.measured.failed_requests}</td><td>—</td></tr>
+                                <tr><td>Qualidade dos dados</td><td>{formatMeasured(measuredLatest.data_quality.baseline.quality_score * 100, 1)}%</td><td>{formatMeasured(measuredLatest.data_quality.effective.quality_score * 100, 1)}%</td><td>—</td></tr>
+                            </tbody></table>
+                        </Style.MeasurementTable>
+                        <Style.ObservationSummary className={measuredLatest.observability.response_applied ? 'applied' : ''}>
+                            <FaShieldAlt/><div><b>{measuredLatest.observability.action}</b><span>{measuredLatest.observability.signal || 'Execução sem detector e sem resposta automática.'}</span></div>
+                        </Style.ObservationSummary>
+                    </Style.MeasuredDetails>
+                )}
+            </Style.RealLab>
 
             <Style.Workspace>
                 <Style.ControlPanel>
@@ -495,4 +799,3 @@ function Simulation() {
 }
 
 export default Simulation
-

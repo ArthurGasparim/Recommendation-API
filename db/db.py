@@ -1,6 +1,8 @@
 import os
+from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
+from sqlalchemy import Column, Text, text
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Field, Session, SQLModel, create_engine
 
@@ -9,7 +11,9 @@ class Books(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     good_id: int = Field(index=True)
     title: str | None = Field(default=None, index=True, max_length=500)
-    authors: str = Field(index=True, max_length=500)
+    # O Goodbooks possui coletâneas com listas de autores superiores a 500
+    # caracteres. Text preserva o dado original sem truncamento.
+    authors: str = Field(sa_column=Column(Text, nullable=False))
     average_rating: float = Field(index=True, ge=0, le=5)
     image_url: str = Field(default="", max_length=2048)
 
@@ -66,6 +70,27 @@ class ModelRevision(SQLModel, table=True):
     revision: int = Field(default=0, ge=0)
 
 
+class AdminJob(SQLModel, table=True):
+    """Tarefa administrativa persistida e visível entre réplicas da API."""
+
+    __tablename__ = "admin_jobs"
+
+    id: str = Field(primary_key=True, max_length=36)
+    kind: str = Field(index=True, max_length=50)
+    status: str = Field(default="queued", index=True, max_length=20)
+    progress: int = Field(default=0, ge=0, le=100)
+    message: str = Field(default="Tarefa aguardando execução", max_length=500)
+    requested_by: int = Field(index=True)
+    request_json: str = Field(sa_column=Column(Text, nullable=False))
+    result_json: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    error_message: str | None = Field(default=None, max_length=2000)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), index=True
+    )
+    started_at: datetime | None = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
+
+
 def _database_url() -> str:
     configured_url = os.getenv("DATABASE_URL")
     if configured_url:
@@ -104,6 +129,14 @@ if database_url.startswith("sqlite"):
         engine_options["poolclass"] = StaticPool
 
 engine = create_engine(database_url, **engine_options)
+
+
+def apply_compatible_schema_migrations() -> None:
+    """Aplica ajustes idempotentes ainda não cobertos por create_all()."""
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE books ALTER COLUMN authors TYPE TEXT"))
 
 
 def get_session():

@@ -1,15 +1,19 @@
+import json
 import os
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
 import pandas as pd
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from prometheus_client import Counter, Gauge, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field as PydanticField, SecretStr, field_validator
 from sqlalchemy import func, text
@@ -23,6 +27,7 @@ from auth import (
     verify_password,
 )
 from db.db import (
+    AdminJob,
     BookTag,
     Books,
     ModelRevision,
@@ -31,9 +36,18 @@ from db.db import (
     ToRead,
     User,
     UserCredential,
+    apply_compatible_schema_migrations,
     engine,
     get_session,
 )
+from experiments.real_runner import (
+    RealExperimentRequest,
+    RealExperimentSuiteRequest,
+    real_experiment_catalog,
+    run_real_experiment,
+    run_real_experiment_suite,
+)
+from experiments.suite_report import build_suite_workbook
 from experiments.simulator import (
     SimulationRequest,
     run_simulation,
@@ -52,6 +66,39 @@ from recommender import (
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_REVISION_ID = 1
 model_refresh_lock = threading.Lock()
+data_load_lock = threading.Lock()
+experiment_lock = threading.Lock()
+
+ADMIN_JOBS_TOTAL = Counter(
+    "recommendation_admin_jobs_total",
+    "Quantidade de tarefas administrativas finalizadas.",
+    ["kind", "status"],
+)
+EXPERIMENT_DURATION = Histogram(
+    "recommendation_experiment_duration_seconds",
+    "Duração das execuções medidas do laboratório.",
+    ["attack_type", "observability", "model"],
+)
+EXPERIMENT_NDCG = Gauge(
+    "recommendation_experiment_ndcg_at_k",
+    "Último NDCG medido por configuração do laboratório.",
+    ["attack_type", "observability", "model"],
+)
+EXPERIMENT_LATENCY_P95 = Gauge(
+    "recommendation_experiment_latency_p95_milliseconds",
+    "Última latência p95 medida pelo laboratório.",
+    ["attack_type", "observability", "model"],
+)
+EXPERIMENT_DATA_QUALITY = Gauge(
+    "recommendation_experiment_data_quality_ratio",
+    "Qualidade efetiva dos dados na última execução medida.",
+    ["attack_type", "observability"],
+)
+DATASET_RECORDS = Gauge(
+    "recommendation_dataset_records",
+    "Quantidade de registros carregados por entidade.",
+    ["entity"],
+)
 
 
 def _configured_admin_ids() -> set[int]:
@@ -137,10 +184,13 @@ def ensure_recommendation_state_current(application: FastAPI) -> None:
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     SQLModel.metadata.create_all(engine)
+    apply_compatible_schema_migrations()
     with Session(engine) as session:
         _model_revision(session)
         session.commit()
     refresh_recommendation_state(application)
+    with Session(engine) as session:
+        _dataset_counts(session)
     yield
 
 
@@ -193,7 +243,7 @@ class BookRequest(BaseModel):
     id: int | None = PydanticField(default=None, gt=0)
     good_id: int = PydanticField(gt=0)
     title: str = PydanticField(min_length=1, max_length=500)
-    authors: str = PydanticField(min_length=1, max_length=500)
+    authors: str = PydanticField(min_length=1, max_length=2000)
     average_rating: float = PydanticField(ge=0, le=5)
     image_url: str = PydanticField(default="", max_length=2048)
 
@@ -289,6 +339,251 @@ def _ordered_books(session: Session, book_ids: list[int]) -> list[Books]:
     records = session.exec(select(Books).where(Books.id.in_(book_ids))).all()
     by_id = {book.id: book for book in records}
     return [by_id[book_id] for book_id in book_ids if book_id in by_id]
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _json_dumps(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _json_loads(value: str | None):
+    return json.loads(value) if value else None
+
+
+def _job_payload(job: AdminJob, *, include_result: bool = True) -> dict:
+    payload = {
+        "id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "progress": job.progress,
+        "message": job.message,
+        "requested_by": job.requested_by,
+        "request": _json_loads(job.request_json),
+        "error": job.error_message,
+        "created_at": job.created_at.isoformat(),
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+    }
+    if include_result:
+        payload["result"] = _json_loads(job.result_json)
+    return payload
+
+
+def _create_job(
+    session: Session,
+    *,
+    kind: str,
+    requested_by: int,
+    request_payload: dict,
+    message: str,
+) -> AdminJob:
+    exclusive_kinds = (
+        ["load_test_data", "real_experiment", "real_experiment_suite"]
+        if kind in {"load_test_data", "real_experiment", "real_experiment_suite"}
+        else [kind]
+    )
+    active = session.exec(
+        select(AdminJob).where(
+            AdminJob.kind.in_(exclusive_kinds),
+            AdminJob.status.in_(["queued", "running"]),
+        )
+    ).first()
+    if active is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Já existe uma tarefa deste tipo em execução",
+                "job_id": active.id,
+            },
+        )
+    job = AdminJob(
+        id=str(uuid4()),
+        kind=kind,
+        requested_by=requested_by,
+        request_json=_json_dumps(request_payload),
+        message=message,
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+    return job
+
+
+def _update_job(
+    job_id: str,
+    *,
+    status_value: str | None = None,
+    progress: int | None = None,
+    message: str | None = None,
+    result: dict | None = None,
+    error: str | None = None,
+) -> None:
+    with Session(engine) as session:
+        job = session.get(AdminJob, job_id)
+        if job is None:
+            return
+        if status_value is not None:
+            job.status = status_value
+            if status_value == "running" and job.started_at is None:
+                job.started_at = _utcnow()
+            if status_value in {"completed", "failed"}:
+                job.completed_at = _utcnow()
+        if progress is not None:
+            job.progress = max(0, min(100, progress))
+        if message is not None:
+            job.message = message
+        if result is not None:
+            job.result_json = _json_dumps(result)
+        if error is not None:
+            job.error_message = error[:2000]
+        session.add(job)
+        session.commit()
+
+
+def _dataset_counts(session: Session) -> dict[str, int]:
+    counts = {
+        "books": int(session.exec(select(func.count()).select_from(Books)).one()),
+        "ratings": int(session.exec(select(func.count()).select_from(Rating)).one()),
+        "tags": int(session.exec(select(func.count()).select_from(Tag)).one()),
+        "book_tags": int(session.exec(select(func.count()).select_from(BookTag)).one()),
+        "to_read": int(session.exec(select(func.count()).select_from(ToRead)).one()),
+    }
+    for entity, count in counts.items():
+        DATASET_RECORDS.labels(entity=entity).set(count)
+    return counts
+
+
+def _run_real_experiment_job(job_id: str, request_payload: dict) -> None:
+    _update_job(
+        job_id,
+        status_value="running",
+        progress=5,
+        message="Copiando o snapshot do banco para o ambiente controlado",
+    )
+    request = RealExperimentRequest.model_validate(request_payload)
+    observability_label = "enabled" if request.with_observability else "disabled"
+    try:
+        with experiment_lock:
+            books_df = app.state.books_df.copy(deep=True)
+            ratings_df = app.state.ratings_df.copy(deep=True)
+            to_read_df = app.state.to_read_df.copy(deep=True)
+            _update_job(
+                job_id,
+                progress=20,
+                message="Executando baseline, ataque e avaliação das recomendações",
+            )
+            result = run_real_experiment(
+                request=request,
+                books_df=books_df,
+                ratings_df=ratings_df,
+                to_read_df=to_read_df,
+            )
+            result["run_id"] = job_id
+        metrics = result["measured"]
+        labels = {
+            "attack_type": request.attack_type,
+            "observability": observability_label,
+            "model": request.model,
+        }
+        EXPERIMENT_DURATION.labels(**labels).observe(result["timing"]["total_seconds"])
+        EXPERIMENT_NDCG.labels(**labels).set(metrics["ndcg_at_k"])
+        EXPERIMENT_LATENCY_P95.labels(**labels).set(metrics["latency_p95_ms"])
+        EXPERIMENT_DATA_QUALITY.labels(
+            attack_type=request.attack_type,
+            observability=observability_label,
+        ).set(result["data_quality"]["effective"]["quality_score"])
+        ADMIN_JOBS_TOTAL.labels(kind="real_experiment", status="completed").inc()
+        _update_job(
+            job_id,
+            status_value="completed",
+            progress=100,
+            message="Experimento medido concluído",
+            result=result,
+        )
+    except Exception as exc:  # pragma: no cover - proteção do worker
+        ADMIN_JOBS_TOTAL.labels(kind="real_experiment", status="failed").inc()
+        _update_job(
+            job_id,
+            status_value="failed",
+            progress=100,
+            message="O experimento falhou",
+            error=str(exc),
+        )
+
+
+def _run_real_experiment_suite_job(job_id: str, request_payload: dict) -> None:
+    _update_job(
+        job_id,
+        status_value="running",
+        progress=2,
+        message="Preparando a bateria completa de experimentos",
+    )
+    request = RealExperimentSuiteRequest.model_validate(request_payload)
+
+    def report(completed: int, total: int, message: str) -> None:
+        progress = 5 + int((completed / max(1, total)) * 90)
+        _update_job(job_id, progress=progress, message=message)
+
+    try:
+        with experiment_lock:
+            books_df = app.state.books_df.copy(deep=True)
+            ratings_df = app.state.ratings_df.copy(deep=True)
+            to_read_df = app.state.to_read_df.copy(deep=True)
+            result = run_real_experiment_suite(
+                request=request,
+                books_df=books_df,
+                ratings_df=ratings_df,
+                to_read_df=to_read_df,
+                progress_callback=report,
+            )
+            result["suite_id"] = job_id
+
+        for comparison in result["comparisons"]:
+            for key, observability_label in (
+                ("without_observability", "disabled"),
+                ("with_observability", "enabled"),
+            ):
+                labels = {
+                    "attack_type": comparison["attack"],
+                    "observability": observability_label,
+                    "model": comparison["model"],
+                }
+                measured = comparison[key]
+                duration_key = f"{key}_seconds"
+                EXPERIMENT_DURATION.labels(**labels).observe(
+                    comparison["timing"][duration_key]
+                )
+                EXPERIMENT_NDCG.labels(**labels).set(measured["ndcg_at_k"])
+                EXPERIMENT_LATENCY_P95.labels(**labels).set(
+                    measured["latency_p95_ms"]
+                )
+                EXPERIMENT_DATA_QUALITY.labels(
+                    attack_type=comparison["attack"],
+                    observability=observability_label,
+                ).set(comparison["data_quality"][key])
+
+        ADMIN_JOBS_TOTAL.labels(
+            kind="real_experiment_suite", status="completed"
+        ).inc()
+        _update_job(
+            job_id,
+            status_value="completed",
+            progress=100,
+            message="Bateria completa concluída; planilha disponível",
+            result=result,
+        )
+    except Exception as exc:  # pragma: no cover - proteção do worker
+        ADMIN_JOBS_TOTAL.labels(kind="real_experiment_suite", status="failed").inc()
+        _update_job(
+            job_id,
+            status_value="failed",
+            progress=100,
+            message="A bateria completa de experimentos falhou",
+            error=str(exc),
+        )
 
 
 @app.get("/health")
@@ -542,73 +837,303 @@ def clear_data(session: SessionDep, principal: AdminPrincipal):
     return {"status": "cleared"}
 
 
+def _load_test_data_records(progress_callback=None) -> dict:
+    def report(progress: int, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(progress, message)
+
+    with data_load_lock:
+        report(5, "Lendo os CSVs empacotados na imagem da API")
+        data_dir = BASE_DIR / "data"
+        books_source = pd.read_csv(data_dir / "books.csv")
+        ratings_df = pd.read_csv(data_dir / "ratings.csv")
+        tags_df = pd.read_csv(data_dir / "tags.csv")
+        to_read_df = pd.read_csv(data_dir / "to_read.csv")
+        book_tags_df = pd.read_csv(data_dir / "book_tags.csv")
+        books_df = create_useful_book_dataframe(books_source)
+        valid_book_ids = set(books_df["id"].astype(int))
+        ratings_df = ratings_df[ratings_df["book_id"].isin(valid_book_ids)]
+        to_read_df = to_read_df[to_read_df["book_id"].isin(valid_book_ids)]
+
+        report(25, "Validando domínios e consolidando chaves repetidas")
+        # O Goodbooks contém chaves compostas repetidas. A tabela representa
+        # apenas uma nota por usuário/livro; conflitos são consolidados pela média.
+        ratings_df = (
+            ratings_df.groupby(
+                ["book_id", "user_id"], as_index=False, sort=False
+            )["rating"]
+            .mean()
+            .assign(
+                rating=lambda frame: frame["rating"].round().clip(1, 5).astype(int)
+            )
+        )
+        book_tags_df = book_tags_df.groupby(
+            ["goodreads_book_id", "tag_id"], as_index=False, sort=False
+        )["count"].max()
+
+        report(45, "Gravando o snapshot validado em uma única transação")
+        with Session(engine) as session:
+            connection = session.connection()
+            for model in (Rating, ToRead, BookTag, Tag, Books):
+                session.exec(delete(model))
+            books_df.to_sql("books", con=connection, if_exists="append", index=False)
+            tags_df.to_sql("tags", con=connection, if_exists="append", index=False)
+            book_tags_df.to_sql(
+                "books_tags", con=connection, if_exists="append", index=False
+            )
+            ratings_df.to_sql(
+                "ratings", con=connection, if_exists="append", index=False
+            )
+            to_read_df.to_sql(
+                "to_read", con=connection, if_exists="append", index=False
+            )
+            if engine.dialect.name == "postgresql":
+                connection.execute(
+                    text(
+                        "SELECT setval(pg_get_serial_sequence('tags', 'tag_id'), "
+                        "coalesce(max(tag_id), 0) + 1, false) FROM tags"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "SELECT setval(pg_get_serial_sequence('books', 'id'), "
+                        "coalesce(max(id), 0) + 1, false) FROM books"
+                    )
+                )
+            mark_recommendation_model_changed(session)
+            session.commit()
+
+        report(90, "Reconstruindo o snapshot dos recomendadores")
+        refresh_recommendation_state(app)
+        result = {
+            "status": "loaded",
+            "books": len(books_df),
+            "ratings": len(ratings_df),
+            "tags": len(tags_df),
+            "book_tags": len(book_tags_df),
+            "to_read": len(to_read_df),
+        }
+        for entity, count in result.items():
+            if entity != "status":
+                DATASET_RECORDS.labels(entity=entity).set(count)
+        return result
+
+
+def _load_test_data_job(job_id: str) -> None:
+    _update_job(
+        job_id,
+        status_value="running",
+        progress=1,
+        message="Iniciando carga controlada dos CSVs",
+    )
+    try:
+        result = _load_test_data_records(
+            lambda progress, message: _update_job(
+                job_id, progress=progress, message=message
+            )
+        )
+        ADMIN_JOBS_TOTAL.labels(kind="load_test_data", status="completed").inc()
+        _update_job(
+            job_id,
+            status_value="completed",
+            progress=100,
+            message="Dados carregados e recomendadores reconstruídos",
+            result=result,
+        )
+    except Exception as exc:  # pragma: no cover - proteção do worker
+        ADMIN_JOBS_TOTAL.labels(kind="load_test_data", status="failed").inc()
+        _update_job(
+            job_id,
+            status_value="failed",
+            progress=100,
+            message="A carga dos CSVs falhou; a transação foi revertida",
+            error=str(exc),
+        )
+
+
 @app.post("/admin/load-test-data")
-def load_test_data(session: SessionDep, principal: AdminPrincipal):
-    data_dir = BASE_DIR / "data"
-    books_source = pd.read_csv(data_dir / "books.csv")
-    ratings_df = pd.read_csv(data_dir / "ratings.csv")
-    tags_df = pd.read_csv(data_dir / "tags.csv")
-    to_read_df = pd.read_csv(data_dir / "to_read.csv")
-    book_tags_df = pd.read_csv(data_dir / "book_tags.csv")
-    books_df = create_useful_book_dataframe(books_source)
-    valid_book_ids = set(books_df["id"].astype(int))
-    ratings_df = ratings_df[ratings_df["book_id"].isin(valid_book_ids)]
-    to_read_df = to_read_df[to_read_df["book_id"].isin(valid_book_ids)]
+def load_test_data(principal: AdminPrincipal):
+    """Compatibilidade com clientes antigos; aguarda a carga terminar."""
+    return _load_test_data_records()
 
-    # O dataset Goodbooks contém chaves compostas repetidas. A tabela de
-    # avaliações representa apenas uma nota por usuário/livro; consolidamos as
-    # notas conflitantes pela média e mantemos a escala inteira de 1 a 5. Para
-    # tags, o maior contador evita duplicar artificialmente a frequência.
-    ratings_df = (
-        ratings_df.groupby(["book_id", "user_id"], as_index=False, sort=False)[
-            "rating"
-        ]
-        .mean()
-        .assign(rating=lambda frame: frame["rating"].round().clip(1, 5).astype(int))
-    )
-    book_tags_df = book_tags_df.groupby(
-        ["goodreads_book_id", "tag_id"], as_index=False, sort=False
-    )["count"].max()
 
-    # Usa a mesma sessão para garantir uma única transação também nos testes SQLite.
-    connection = session.connection()
-    for model in (Rating, ToRead, BookTag, Tag, Books):
-        session.exec(delete(model))
-    books_df.to_sql("books", con=connection, if_exists="append", index=False)
-    tags_df.to_sql("tags", con=connection, if_exists="append", index=False)
-    book_tags_df.to_sql(
-        "books_tags", con=connection, if_exists="append", index=False
+@app.post("/admin/data/load", status_code=status.HTTP_202_ACCEPTED)
+def enqueue_test_data_load(
+    background_tasks: BackgroundTasks,
+    session: SessionDep,
+    principal: AdminPrincipal,
+):
+    job = _create_job(
+        session,
+        kind="load_test_data",
+        requested_by=principal.user_id,
+        request_payload={"source": "bundled_goodbooks_csv"},
+        message="Carga dos CSVs adicionada à fila",
     )
-    ratings_df.to_sql(
-        "ratings", con=connection, if_exists="append", index=False
-    )
-    to_read_df.to_sql(
-        "to_read", con=connection, if_exists="append", index=False
-    )
-    if engine.dialect.name == "postgresql":
-        connection.execute(
-            text(
-                "SELECT setval(pg_get_serial_sequence('tags', 'tag_id'), "
-                "coalesce(max(tag_id), 0) + 1, false) FROM tags"
-            )
+    background_tasks.add_task(_load_test_data_job, job.id)
+    return _job_payload(job)
+
+
+@app.get("/admin/jobs/{job_id}")
+def get_admin_job(job_id: str, session: SessionDep, principal: AdminPrincipal):
+    job = session.get(AdminJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Tarefa administrativa não encontrada")
+    return _job_payload(job)
+
+
+@app.get("/admin/experiments/real/catalog")
+def get_real_experiment_catalog(principal: AdminPrincipal):
+    return real_experiment_catalog()
+
+
+@app.post(
+    "/admin/experiments/real/run", status_code=status.HTTP_202_ACCEPTED
+)
+def enqueue_real_experiment(
+    request: RealExperimentRequest,
+    background_tasks: BackgroundTasks,
+    session: SessionDep,
+    principal: AdminPrincipal,
+):
+    # Outra réplica pode ter concluído a carga dos CSVs. A revisão persistida
+    # garante que esta réplica leia o snapshot mais recente antes de validar e
+    # copiar os dados do experimento.
+    ensure_recommendation_state_current(app)
+    if len(app.state.books_df) == 0 or len(app.state.ratings_df) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Carregue os CSVs antes de executar um ataque real",
         )
-        connection.execute(
-            text(
-                "SELECT setval(pg_get_serial_sequence('books', 'id'), "
-                "coalesce(max(id), 0) + 1, false) FROM books"
-            )
-        )
+    job = _create_job(
+        session,
+        kind="real_experiment",
+        requested_by=principal.user_id,
+        request_payload=request.model_dump(),
+        message="Experimento real adicionado à fila",
+    )
+    background_tasks.add_task(
+        _run_real_experiment_job, job.id, request.model_dump()
+    )
+    return _job_payload(job)
 
-    mark_recommendation_model_changed(session)
-    session.commit()
-    refresh_recommendation_state(app)
+
+@app.post(
+    "/admin/experiments/real/suite", status_code=status.HTTP_202_ACCEPTED
+)
+def enqueue_real_experiment_suite(
+    request: RealExperimentSuiteRequest,
+    background_tasks: BackgroundTasks,
+    session: SessionDep,
+    principal: AdminPrincipal,
+):
+    """Executa sequencialmente todos os modelos, ataques e modos de defesa."""
+
+    ensure_recommendation_state_current(app)
+    if len(app.state.books_df) == 0 or len(app.state.ratings_df) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Carregue os CSVs antes de executar a bateria completa",
+        )
+    job = _create_job(
+        session,
+        kind="real_experiment_suite",
+        requested_by=principal.user_id,
+        request_payload=request.model_dump(),
+        message="Bateria completa adicionada à fila",
+    )
+    background_tasks.add_task(
+        _run_real_experiment_suite_job, job.id, request.model_dump()
+    )
+    return _job_payload(job)
+
+
+@app.get("/admin/experiments/real/suite/{job_id}/xlsx")
+def download_real_experiment_suite(
+    job_id: str,
+    session: SessionDep,
+    principal: AdminPrincipal,
+):
+    """Gera a planilha a partir do resultado persistido, sem depender do pod."""
+
+    job = session.get(AdminJob, job_id)
+    if job is None or job.kind != "real_experiment_suite":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bateria de experimentos não encontrada",
+        )
+    if job.status != "completed" or not job.result_json:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A planilha ficará disponível quando a bateria for concluída",
+        )
+    workbook = build_suite_workbook(_json_loads(job.result_json))
+    filename = f"comparacao-observabilidade-{job.id}.xlsx"
+    return StreamingResponse(
+        workbook,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/admin/experiments/real/metrics")
+def get_real_experiment_metrics(
+    session: SessionDep,
+    principal: AdminPrincipal,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+):
+    jobs = session.exec(
+        select(AdminJob)
+        .where(AdminJob.kind == "real_experiment")
+        .order_by(AdminJob.created_at.desc())
+        .limit(limit)
+    ).all()
+    completed = session.exec(
+        select(AdminJob)
+        .where(
+            AdminJob.kind == "real_experiment",
+            AdminJob.status == "completed",
+            AdminJob.result_json.is_not(None),
+        )
+        .order_by(AdminJob.completed_at.desc())
+    ).first()
+    completed_suite = session.exec(
+        select(AdminJob)
+        .where(
+            AdminJob.kind == "real_experiment_suite",
+            AdminJob.status == "completed",
+            AdminJob.result_json.is_not(None),
+        )
+        .order_by(AdminJob.completed_at.desc())
+    ).first()
+    latest_suite = None
+    if completed_suite is not None:
+        suite_result = _json_loads(completed_suite.result_json)
+        latest_suite = {
+            **_job_payload(completed_suite, include_result=False),
+            "download_url": (
+                f"/admin/experiments/real/suite/{completed_suite.id}/xlsx"
+            ),
+            "summary": {
+                "models": suite_result["models"],
+                "attacks": suite_result["attacks"],
+                "comparisons": suite_result["comparisons_count"],
+                "scenario_runs": suite_result["scenario_runs"],
+                "total_seconds": suite_result["total_seconds"],
+            },
+        }
     return {
-        "status": "loaded",
-        "books": len(books_df),
-        "ratings": len(ratings_df),
-        "tags": len(tags_df),
-        "book_tags": len(book_tags_df),
-        "to_read": len(to_read_df),
+        "kind": "measured_metrics",
+        "measured_at": _utcnow().isoformat(),
+        "dataset": _dataset_counts(session),
+        "latest": _json_loads(completed.result_json) if completed else None,
+        "latest_suite": latest_suite,
+        "runs": [_job_payload(job, include_result=False) for job in jobs],
     }
 
 
